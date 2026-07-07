@@ -2,22 +2,12 @@
 
 import json
 import os
-import subprocess
+import shlex
 import sys
-import time
 import urllib.error
 import urllib.request
 
 import modal
-
-CADDY_INSTALL = (
-    "curl -s https://api.github.com/repos/caddyserver/caddy/releases/latest "
-    "| grep browser_download_url | grep linux_amd64.tar.gz | cut -d '\"' -f 4 "
-    "| xargs curl -fsSL -o /tmp/caddy.tar.gz "
-    "&& tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy "
-    "&& chmod +x /usr/local/bin/caddy "
-    "&& rm /tmp/caddy.tar.gz"
-)
 
 DEVIN_CLI_INSTALL = (
     # installer auto-runs an interactive `devin setup` (browser OAuth) at the
@@ -28,18 +18,15 @@ DEVIN_CLI_INSTALL = (
 
 DEVIN_BIN = "/root/.local/bin/devin"
 
-
-def base_image() -> modal.Image:
-    """git + devin CLI + caddy, nothing session-specific baked in."""
-    return (
-        modal.Image.debian_slim(python_version="3.12")
-        .apt_install("git", "curl", "ca-certificates", "tar")
-        .run_commands(DEVIN_CLI_INSTALL)
-        .run_commands(f"test -x {DEVIN_BIN}")
-        .run_commands(CADDY_INSTALL)
-        .run_commands("test -x /usr/local/bin/caddy")
-        .run_commands("mkdir -p /root/workspace")
-    )
+main_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install("git", "curl", "ca-certificates")
+    .run_commands(DEVIN_CLI_INSTALL)
+    .run_commands(f"test -x {DEVIN_BIN}")
+    .run_commands("mkdir -p /root/workspace")
+    # add your repos here, e.g.:
+    # .run_commands("git clone https://github.com/your-org/your-repo /root/workspace/your-repo")
+)
 
 
 # --- credential-injection sidecar -------------------------------------------
@@ -48,13 +35,21 @@ def base_image() -> modal.Image:
 # Admin, so whatever token we hand a worker today is likely broader than it
 # needs. Devin's own Outposts docs also warn that anything in the worker's
 # environment "is inherited by the agent's shell" -- so if the real token
-# sits in devin worker start's env, a compromised or prompt-injected session
-# could read it. This runs a local Caddy reverse proxy (not mitmproxy --
-# mitmproxy's TLS-terminating MITM gets fingerprint-blocked by some edges;
-# Caddy makes an ordinary outbound HTTPS connection, no interception) that
-# holds the real token and injects it into the Authorization header when
-# forwarding to the real Devin API. devin worker start only ever sees a
-# throwaway token pointed at the sidecar's localhost URL.
+# sat in devin worker start's own env, a compromised or prompt-injected
+# session could read it.
+#
+# This runs Caddy as a real Modal Sandbox sidecar: a genuinely separate
+# container on its own network namespace (not just a second process sharing
+# the main container's env), reachable by the main container only as
+# `http://caddy:PORT`. The real DEVIN_OUTPOSTS_TOKEN is a secret attached
+# only to the sidecar container. Caddy injects it into the Authorization
+# header via its own environment-variable substitution -- no Python-side templating of
+# the Caddyfile at runtime, and the main container never holds the real
+# token, only a throwaway one that never leaves it.
+#
+# (Caddy, not mitmproxy: mitmproxy's TLS-terminating MITM gets
+# fingerprint-blocked by some edges; Caddy makes an ordinary outbound HTTPS
+# connection, no interception, so there's nothing to fingerprint.)
 
 CADDYFILE = """\
 {
@@ -62,63 +57,42 @@ CADDYFILE = """\
 	auto_https off
 }
 
-:{port} {
-	reverse_proxy {upstream} {
+:{$$SIDECAR_PORT} {
+	reverse_proxy {$$UPSTREAM_URL} {
 		header_up Host {upstream_hostport}
-		header_up Authorization "Bearer {token}"
+		header_up Authorization "Bearer {$$DEVIN_OUTPOSTS_TOKEN}"
 	}
 }
 """
 
+CADDY_INSTALL = (
+    "curl -s https://api.github.com/repos/caddyserver/caddy/releases/latest "
+    "| grep browser_download_url | grep linux_amd64.tar.gz | cut -d '\"' -f 4 "
+    "| xargs curl -fsSL -o /tmp/caddy.tar.gz "
+    "&& tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy "
+    "&& chmod +x /usr/local/bin/caddy "
+    "&& rm /tmp/caddy.tar.gz"
+)
+
+sidecar_image = (
+    modal.Image.debian_slim()
+    .apt_install("curl", "ca-certificates", "tar")
+    .run_commands(CADDY_INSTALL)
+    .run_commands("test -x /usr/local/bin/caddy")
+    # run_commands() becomes a single Dockerfile RUN line -- a raw multi-line
+    # argument breaks the line-based Dockerfile parser, so flatten newlines
+    # to \n and reinflate them at build time with `printf %b`
+    .run_commands(
+        "mkdir -p /etc/caddy && printf '%b' "
+        + shlex.quote(CADDYFILE.replace("\n", "\\n"))
+        + " > /etc/caddy/Caddyfile"
+    )
+)
+
 # shaped like a real `cog_...` token in case the CLI does any client-side
 # format validation before sending it -- Caddy overwrites it regardless
 DUMMY_TOKEN = "cog_sidecarmanaged00000000000000000000000000000000"
-
 SIDECAR_PORT = 8686
-
-
-def start_sidecar(port: int, upstream_api_url: str, real_token: str) -> subprocess.Popen:
-    """Start the Caddy sidecar in the background and block until it's ready."""
-    caddyfile_path = "/tmp/devin-sidecar.Caddyfile"
-    with open(caddyfile_path, "w") as f:
-        f.write(
-            CADDYFILE.replace("{port}", str(port))
-            .replace("{upstream}", upstream_api_url)
-            .replace("{token}", real_token)
-        )
-
-    proc = subprocess.Popen(
-        ["/usr/local/bin/caddy", "run", "--config", caddyfile_path, "--adapter", "caddyfile"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-
-    health_url = f"http://127.0.0.1:{port}/"
-    for _ in range(100):
-        if proc.poll() is not None:
-            output = proc.stdout.read().decode(errors="replace")
-            raise RuntimeError(f"caddy sidecar exited before becoming ready:\n{output}")
-        try:
-            urllib.request.urlopen(health_url, timeout=1)
-            return proc
-        except urllib.error.URLError:
-            time.sleep(0.1)
-        except urllib.error.HTTPError:
-            # any HTTP response at all (even 4xx/5xx from upstream) means
-            # caddy itself is up and proxying
-            return proc
-    proc.terminate()
-    output = proc.stdout.read(4096).decode(errors="replace")
-    raise RuntimeError(f"caddy sidecar did not become ready in time:\n{output}")
-
-
-def clean_worker_env(base_env: dict, sidecar_port: int) -> dict:
-    """Env for the devin worker subprocess: no real token, points at the sidecar."""
-    return {
-        **base_env,
-        "DEVIN_API_URL": f"http://127.0.0.1:{sidecar_port}",
-        "DEVIN_OUTPOSTS_TOKEN": DUMMY_TOKEN,
-    }
 
 
 # --- the "master function" ---------------------------------------------------
@@ -143,14 +117,13 @@ ACCEPTOR_ID = f"modal-{POOL_NAME}"
 POLL_INTERVAL_SECS = 30
 SESSION_TIMEOUT_SECS = 1800
 
+# plain App(name), not App.lookup: `modal deploy` needs a locally-owned app
+# to attach @app.function to. Named images need the opposite -- an app with
+# an app_id already assigned -- so that build+publish step runs separately,
+# below, via `python3 pools/$pool_file_stem.py` rather than as part of deploy.
 app = modal.App(f"outpost-pool-{POOL_NAME}")
 secret = modal.Secret.from_name("$secret_name")
-
-image = (
-    base_image()
-    # add your repos here, e.g.:
-    # .run_commands("git clone https://github.com/your-org/your-repo /root/workspace/your-repo")
-)
+SIDECAR_IMAGE_NAME = f"outpost-{POOL_NAME}-sidecar-caddy"
 
 
 def _api_request(api_url, token, method, path, body=None):
@@ -171,44 +144,59 @@ def _release(api_url, token, session_id):
     )
 
 
-@app.function(image=image, secrets=[secret], timeout=SESSION_TIMEOUT_SECS + 60)
+@app.function(image=main_image, secrets=[secret], timeout=SESSION_TIMEOUT_SECS + 60)
 def run_session(session_id: str):
     token = os.environ["DEVIN_OUTPOSTS_TOKEN"]
 
+    sb = modal.Sandbox.create(
+        "sleep", "infinity",
+        app=app, image=main_image, workdir="/root/workspace", timeout=SESSION_TIMEOUT_SECS,
+    )
     try:
-        sidecar_proc = start_sidecar(SIDECAR_PORT, API_URL, token)
-        try:
-            base_env = {
-                k: os.environ[k]
-                for k in ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "TZ")
-                if k in os.environ
-            }
-            worker_env = clean_worker_env(base_env, SIDECAR_PORT)
-            result = subprocess.run(
-                [
-                    DEVIN_BIN, "worker", "start",
-                    "--session", session_id,
-                    "--pool", POOL_ID,
-                    "--acceptor-id", ACCEPTOR_ID,
-                ],
-                env=worker_env,
-                cwd="/root/workspace",
-                timeout=SESSION_TIMEOUT_SECS,
-            )
-            print(f"[{session_id}] devin worker exited: {result.returncode}")
-            if result.returncode != 0:
-                _release(API_URL, token, session_id)
-                print(f"[{session_id}] released claim after nonzero exit")
-        finally:
-            sidecar_proc.terminate()
+        sb._experimental_sidecars.create(
+            "caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile",
+            name="caddy",
+            image=modal.Image.from_name(SIDECAR_IMAGE_NAME),
+            env={"SIDECAR_PORT": str(SIDECAR_PORT), "UPSTREAM_URL": API_URL},
+            secrets=[secret],
+        )
+
+        wait_proc = sb.exec(
+            "sh", "-c",
+            f"for i in $$(seq 1 100); do "
+            f"curl -sf http://caddy:{SIDECAR_PORT}/ -o /dev/null && exit 0; sleep 0.1; done; exit 1",
+        )
+        if wait_proc.wait() != 0:
+            raise RuntimeError("caddy sidecar did not become ready in time")
+
+        worker_env = {
+            "DEVIN_API_URL": f"http://caddy:{SIDECAR_PORT}",
+            "DEVIN_OUTPOSTS_TOKEN": DUMMY_TOKEN,
+        }
+        worker_proc = sb.exec(
+            DEVIN_BIN, "worker", "start",
+            "--session", session_id,
+            "--pool", POOL_ID,
+            "--acceptor-id", ACCEPTOR_ID,
+            env=worker_env,
+        )
+        for line in worker_proc.stdout:
+            print(f"[{session_id}] {line}", end="")
+        returncode = worker_proc.wait()
+        print(f"[{session_id}] devin worker exited: {returncode}")
+        if returncode != 0:
+            _release(API_URL, token, session_id)
+            print(f"[{session_id}] released claim after nonzero exit")
     except Exception as e:
         print(f"[{session_id}] run_session failed: {e}", file=sys.stderr)
         _release(API_URL, token, session_id)
         print(f"[{session_id}] released claim after failure")
         raise
+    finally:
+        sb.terminate()
 
 
-@app.function(image=image, secrets=[secret], schedule=modal.Period(seconds=POLL_INTERVAL_SECS))
+@app.function(image=main_image, secrets=[secret], schedule=modal.Period(seconds=POLL_INTERVAL_SECS))
 def poll_and_dispatch():
     api_url = os.environ.get("DEVIN_API_URL", API_URL)
     token = os.environ["DEVIN_OUTPOSTS_TOKEN"]
@@ -238,3 +226,17 @@ def poll_and_dispatch():
         deadline = claim.get("status", {}).get("claim_deadline")
         print(f"[{session_id}] claimed, claim_deadline={deadline}, dispatching")
         run_session.spawn(session_id)
+
+
+if __name__ == "__main__":
+    # one-time (or whenever you change sidecar_image) step: build + publish
+    # the sidecar image under a name, so `modal deploy` and run_session can
+    # both just reference it by name without ever rebuilding it themselves.
+    # https://modal.com/docs/guide/images#named-images
+    #
+    # run this before the first `modal deploy pools/$pool_file_stem.py`:
+    #   python3 pools/$pool_file_stem.py
+    build_app = modal.App.lookup(f"outpost-pool-{POOL_NAME}-image-builds", create_if_missing=True)
+    with modal.enable_output():
+        sidecar_image.build(build_app).publish(SIDECAR_IMAGE_NAME)
+    print(f"published {SIDECAR_IMAGE_NAME}")

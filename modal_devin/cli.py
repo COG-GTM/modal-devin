@@ -52,17 +52,23 @@ def create(
 
     out_dir = Path(pools_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{name.replace('-', '_')}.py"
+    pool_file_stem = name.replace("-", "_")
+    out_path = out_dir / f"{pool_file_stem}.py"
 
     if out_path.exists():
         raise SystemExit(f"{out_path} already exists, not overwriting")
 
     generated = Template(TEMPLATE_PATH.read_text()).substitute(
-        pool_name=name, pool_id=pool_id, api_url=api_url, secret_name=secret_name
+        pool_name=name,
+        pool_id=pool_id,
+        api_url=api_url,
+        secret_name=secret_name,
+        pool_file_stem=pool_file_stem,
     )
     out_path.write_text(generated)
     print(f"wrote {out_path} (self-contained -- no modal_devin import)")
     print(f"next: modal secret create {secret_name} DEVIN_OUTPOSTS_TOKEN=<token>")
+    print(f"then: python3 {out_path}   (builds + publishes the sidecar image, one-time)")
     print(f"then: modal deploy {out_path}")
 
 
