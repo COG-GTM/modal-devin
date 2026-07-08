@@ -12,10 +12,14 @@ bodies) and the pool file's `run_session`/`poll_and_dispatch` are thin wrappers 
 
 import json
 import os
+import re
 import shlex
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
+from collections.abc import Mapping
+from typing import Any
 
 import modal
 
@@ -49,8 +53,10 @@ DUMMY_TOKEN = "cog_sidecarmanaged00000000000000000000000000000000"
 SIDECAR_PORT = 8686
 POLL_INTERVAL_SECS = 30
 SESSION_TIMEOUT_SECS = 1800
+API_TIMEOUT_SECS = 30
 
 CHROME_PATH = "/usr/bin/chromium"
+_SHELL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def worker_image(
@@ -108,24 +114,41 @@ def clone_private_repo(
     (the "x-access-token" username convention) -- adjust if cloning from a host that expects a
     different credential format.
     """
-    if not token_env_var.isidentifier():
+    if not _SHELL_IDENTIFIER.fullmatch(token_env_var):
         raise ValueError(f"token_env_var must be a valid shell identifier, got: {token_env_var!r}")
-    scheme, sep, rest = repo_url.partition("://")
-    if not sep:
+    parsed = urllib.parse.urlsplit(repo_url)
+    if parsed.scheme != "https" or not parsed.netloc or not parsed.path:
         raise ValueError(f"repo_url must be a full https:// URL, got: {repo_url!r}")
+    if parsed.username or parsed.password:
+        raise ValueError("repo_url must not include credentials")
+    if parsed.fragment:
+        raise ValueError("repo_url must not include a URL fragment")
+
+    repo_suffix = f"{parsed.netloc}{parsed.path}"
+    if parsed.query:
+        repo_suffix = f"{repo_suffix}?{parsed.query}"
+    plain_repo_url = urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, parsed.query, "")
+    )
 
     # Single-quoted literals concatenated around a double-quoted `"$VAR"` expansion: only the
     # token reference is subject to shell expansion, nothing else in repo_url/dest is interpreted.
     # (An earlier version shlex.quote'd the whole URL as one single-quoted string, which silently
     # sent the literal text "$GIT_CLONE_TOKEN" instead of the actual secret to git -- broken.)
-    auth_url = shlex.quote(f"{scheme}://x-access-token:") + f'"${token_env_var}"' + shlex.quote(f"@{rest}")
+    auth_url = (
+        shlex.quote("https://x-access-token:")
+        + f'"${token_env_var}"'
+        + shlex.quote(f"@{repo_suffix}")
+    )
     secret_desc = token_secret.name or "<secret>"
-    fail_msg = f"{token_env_var} is empty -- does secret {secret_desc} have a key named {token_env_var}?"
+    fail_msg = (
+        f"{token_env_var} is empty -- does secret {secret_desc} have a key named {token_env_var}?"
+    )
     return image.run_commands(
         f'test -n "${token_env_var}" '
         f"|| {{ echo {shlex.quote(fail_msg)} >&2; exit 1; }} "
         f"&& git clone {auth_url} {shlex.quote(dest)} "
-        f"&& git -C {shlex.quote(dest)} remote set-url origin {shlex.quote(repo_url)}",
+        f"&& git -C {shlex.quote(dest)} remote set-url origin {shlex.quote(plain_repo_url)}",
         secrets=[token_secret],
     )
 
@@ -156,22 +179,57 @@ def build_sidecar_image_id(pool_name: str) -> str:
     return _sidecar_image().build(build_app).object_id
 
 
-def _api_request(api_url, token, method, path, body=None):
+def _api_request(
+    api_url: str,
+    token: str,
+    method: str,
+    path: str,
+    body: Mapping[str, Any] | None = None,
+    *,
+    timeout: float = API_TIMEOUT_SECS,
+) -> Any:
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(f"{api_url}{path}", data=data, method=method)
+    url = f"{api_url.rstrip('/')}/{path.lstrip('/')}"
+    req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Authorization", f"Bearer {token}")
     if data is not None:
         req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        response_body = resp.read()
+        return json.loads(response_body) if response_body else {}
+
+
+def _devin_path(session_id: str, action: str) -> str:
+    return f"/opbeta/outposts/devins/{urllib.parse.quote(session_id, safe='')}/{action}"
+
+
+def _query_path(path: str, query: Mapping[str, str]) -> str:
+    return f"{path}?{urllib.parse.urlencode(query)}"
 
 
 def _release(api_url, token, session_id, acceptor_id):
     _api_request(
-        api_url, token, "POST",
-        f"/opbeta/outposts/devins/{session_id}/release",
+        api_url,
+        token,
+        "POST",
+        _devin_path(session_id, "release"),
         {"acceptor_id": acceptor_id},
     )
+
+
+def _release_safely(
+    api_url: str,
+    token: str,
+    session_id: str,
+    acceptor_id: str,
+    reason: str,
+) -> None:
+    try:
+        _release(api_url, token, session_id, acceptor_id)
+    except urllib.error.URLError as e:
+        print(f"[{session_id}] failed to release claim after {reason}: {e}", file=sys.stderr)
+    else:
+        print(f"[{session_id}] released claim after {reason}")
 
 
 def _session_status(api_url, token, session_id, acceptor_id) -> str | None:
@@ -179,7 +237,13 @@ def _session_status(api_url, token, session_id, acceptor_id) -> str | None:
     terminated), or None if it's not (or no longer) listed as claimed by us."""
     try:
         claimed = _api_request(
-            api_url, token, "GET", f"/opbeta/outposts/devins?phase=claimed&acceptor_id={acceptor_id}"
+            api_url,
+            token,
+            "GET",
+            _query_path(
+                "/opbeta/outposts/devins",
+                {"phase": "claimed", "acceptor_id": acceptor_id},
+            ),
         )
     except urllib.error.URLError:
         return None
@@ -198,21 +262,28 @@ def _snapshot_name(pool_name: str, session_id: str) -> str:
 def _create_sandbox(
     app: modal.App, image: modal.Image, resume_name: str, workdir: str, timeout: int
 ) -> modal.Sandbox:
-    """Start from a published snapshot for `resume_name` if one exists and is still usable
+    """Start from a published snapshot for `resume_name` if one exists.
+
+    A missing snapshot falls back to the base image. Other Modal errors are allowed to propagate so
+    a transient auth/network/quota problem does not silently discard suspended session state.
     (`Image.from_name` is a lazy reference -- nothing about a missing/expired snapshot surfaces
-    until Sandbox.create actually resolves it), otherwise fall back to the base image."""
+    until Sandbox.create actually resolves it)."""
     try:
         sb = modal.Sandbox.create(
-            "sleep", "infinity",
-            app=app, image=modal.Image.from_name(resume_name), workdir=workdir, timeout=timeout,
+            "sleep",
+            "infinity",
+            app=app,
+            image=modal.Image.from_name(resume_name),
+            workdir=workdir,
+            timeout=timeout,
         )
         print(f"resuming from snapshot {resume_name!r}")
         return sb
     except modal.exception.NotFoundError:
         pass  # no snapshot for this session yet -- the common case, nothing to log
-    except Exception as e:
-        print(f"resume snapshot {resume_name!r} unusable ({e}), starting fresh", file=sys.stderr)
-    return modal.Sandbox.create("sleep", "infinity", app=app, image=image, workdir=workdir, timeout=timeout)
+    return modal.Sandbox.create(
+        "sleep", "infinity", app=app, image=image, workdir=workdir, timeout=timeout
+    )
 
 
 def run_session(
@@ -223,7 +294,7 @@ def run_session(
     pool_name: str,
     pool_id: str,
     api_url: str,
-    sidecar_image_id: str,
+    sidecar_image_id: str | None = None,
     session_timeout_secs: int = SESSION_TIMEOUT_SECS,
 ):
     """Run one claimed session to completion (or suspension). Call this from the pool file's
@@ -243,10 +314,18 @@ def run_session(
     token = os.environ["DEVIN_OUTPOSTS_TOKEN"]
     snapshot_name = _snapshot_name(pool_name, session_id)
 
-    sb = _create_sandbox(app, image, snapshot_name, "/root/workspace", session_timeout_secs)
+    sb: modal.Sandbox | None = None
     try:
+        if sidecar_image_id is None:
+            sidecar_image_id = build_sidecar_image_id(pool_name)
+        sb = _create_sandbox(app, image, snapshot_name, "/root/workspace", session_timeout_secs)
         sb._experimental_sidecars.create(
-            "caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile",
+            "caddy",
+            "run",
+            "--config",
+            "/etc/caddy/Caddyfile",
+            "--adapter",
+            "caddyfile",
             name="caddy",
             image=modal.Image.from_id(sidecar_image_id),
             env={"SIDECAR_PORT": str(SIDECAR_PORT), "UPSTREAM_URL": api_url},
@@ -254,7 +333,8 @@ def run_session(
         )
 
         wait_proc = sb.exec(
-            "sh", "-c",
+            "sh",
+            "-c",
             f"for i in $(seq 1 300); do "
             f"curl -s http://caddy:{SIDECAR_PORT}/ -o /dev/null && exit 0; sleep 0.2; done; "
             f"curl -v http://caddy:{SIDECAR_PORT}/ 2>&1; exit 1",
@@ -264,15 +344,20 @@ def run_session(
                 "caddy sidecar did not become ready in time:\n" + wait_proc.stdout.read()
             )
 
-        worker_env = {
+        worker_env: dict[str, str | None] = {
             "DEVIN_API_URL": f"http://caddy:{SIDECAR_PORT}",
             "DEVIN_OUTPOSTS_TOKEN": DUMMY_TOKEN,
         }
         worker_proc = sb.exec(
-            DEVIN_BIN, "worker", "start",
-            "--session", session_id,
-            "--pool", pool_id,
-            "--acceptor-id", acceptor_id,
+            DEVIN_BIN,
+            "worker",
+            "start",
+            "--session",
+            session_id,
+            "--pool",
+            pool_id,
+            "--acceptor-id",
+            acceptor_id,
             env=worker_env,
         )
         for line in worker_proc.stdout:
@@ -289,15 +374,14 @@ def run_session(
         # underlying Image's own ttl (see snapshot_filesystem's ttl param, default 30 days).
 
         if returncode != 0:
-            _release(api_url, token, session_id, acceptor_id)
-            print(f"[{session_id}] released claim after nonzero exit")
+            _release_safely(api_url, token, session_id, acceptor_id, "nonzero exit")
     except Exception as e:
         print(f"[{session_id}] run_session failed: {e}", file=sys.stderr)
-        _release(api_url, token, session_id, acceptor_id)
-        print(f"[{session_id}] released claim after failure")
+        _release_safely(api_url, token, session_id, acceptor_id, "failure")
         raise
     finally:
-        sb.terminate()
+        if sb is not None:
+            sb.terminate()
 
 
 def poll_and_dispatch(*, pool_name: str, pool_id: str, api_url: str, run_session_fn):
@@ -311,7 +395,10 @@ def poll_and_dispatch(*, pool_name: str, pool_id: str, api_url: str, run_session
 
     try:
         pending = _api_request(
-            poll_api_url, token, "GET", f"/opbeta/outposts/devins?pool={pool_id}&phase=pending"
+            poll_api_url,
+            token,
+            "GET",
+            _query_path("/opbeta/outposts/devins", {"pool": pool_id, "phase": "pending"}),
         )
     except urllib.error.URLError as e:
         print(f"poll failed: {e}", file=sys.stderr)
@@ -321,8 +408,10 @@ def poll_and_dispatch(*, pool_name: str, pool_id: str, api_url: str, run_session
         session_id = item["metadata"]["session_id"]
         try:
             claim = _api_request(
-                poll_api_url, token, "POST",
-                f"/opbeta/outposts/devins/{session_id}/claim",
+                poll_api_url,
+                token,
+                "POST",
+                _devin_path(session_id, "claim"),
                 {"acceptor_id": acceptor_id},
             )
         except urllib.error.HTTPError as e:
@@ -333,4 +422,8 @@ def poll_and_dispatch(*, pool_name: str, pool_id: str, api_url: str, run_session
 
         deadline = claim.get("status", {}).get("claim_deadline")
         print(f"[{session_id}] claimed, claim_deadline={deadline}, dispatching")
-        run_session_fn.spawn(session_id)
+        try:
+            run_session_fn.spawn(session_id)
+        except Exception as e:
+            print(f"[{session_id}] dispatch failed: {e}", file=sys.stderr)
+            _release_safely(poll_api_url, token, session_id, acceptor_id, "dispatch failure")

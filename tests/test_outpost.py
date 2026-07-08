@@ -2,8 +2,8 @@
 dispatch loop, private-repo cloning, and image construction.
 
 Sandbox/sidecar execution and real Modal image builds (`worker_image(...).build(...)`,
-`build_sidecar_image_id`, `run_session`) talk to the live Modal API and aren't covered here --
-they're exercised by hand against a real workspace instead.
+`build_sidecar_image_id`, full `run_session` execution) talk to the live Modal API and aren't
+covered here -- they're exercised by hand against a real workspace instead.
 """
 
 from __future__ import annotations
@@ -13,13 +13,20 @@ import json
 import os
 import subprocess
 import urllib.error
+import urllib.request
+from email.message import Message
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock, call
 
 import modal
 import pytest
 
 from modal_devin import outpost
+
+
+def _secret_ref(name: str | None) -> modal.Secret:
+    return cast(modal.Secret, SimpleNamespace(name=name))
 
 
 # ------------------------------------------------------------------------------------------------
@@ -35,7 +42,7 @@ class _RecordingUrlopen:
         self.response_body = {}
         self.requests: list[urllib.request.Request] = []
 
-    def __call__(self, req):
+    def __call__(self, req, **kwargs):
         self.requests.append(req)
         return io.BytesIO(json.dumps(self.response_body).encode())
 
@@ -79,7 +86,9 @@ class TestRelease:
         outpost._release("https://api.example.com", "tok", "sess-1", "modal-mypool")
 
         release_request.assert_called_once_with(
-            "https://api.example.com", "tok", "POST",
+            "https://api.example.com",
+            "tok",
+            "POST",
             "/opbeta/outposts/devins/sess-1/release",
             {"acceptor_id": "modal-mypool"},
         )
@@ -116,8 +125,10 @@ class TestPollAndDispatch:
         run_session_fn = Mock()
 
         outpost.poll_and_dispatch(
-            pool_name="mypool", pool_id="outpost_env-abc",
-            api_url="https://api.example.com", run_session_fn=run_session_fn,
+            pool_name="mypool",
+            pool_id="outpost_env-abc",
+            api_url="https://api.example.com",
+            run_session_fn=run_session_fn,
         )
 
         run_session_fn.spawn.assert_has_calls([call("sess-1"), call("sess-2")])
@@ -131,15 +142,17 @@ class TestPollAndDispatch:
             if method == "GET":
                 return _pending("sess-1", "sess-2")
             if "sess-1" in path:
-                raise urllib.error.HTTPError(path, 409, "Conflict", hdrs=None, fp=None)
+                raise urllib.error.HTTPError(path, 409, "Conflict", hdrs=Message(), fp=None)
             return {"status": {}}
 
         monkeypatch.setattr(outpost, "_api_request", fake_api_request)
         run_session_fn = Mock()
 
         outpost.poll_and_dispatch(
-            pool_name="mypool", pool_id="outpost_env-abc",
-            api_url="https://api.example.com", run_session_fn=run_session_fn,
+            pool_name="mypool",
+            pool_id="outpost_env-abc",
+            api_url="https://api.example.com",
+            run_session_fn=run_session_fn,
         )
 
         run_session_fn.spawn.assert_called_once_with("sess-2")
@@ -149,15 +162,17 @@ class TestPollAndDispatch:
             if method == "GET":
                 return _pending("sess-1", "sess-2")
             if "sess-1" in path:
-                raise urllib.error.HTTPError(path, 500, "Server Error", hdrs=None, fp=None)
+                raise urllib.error.HTTPError(path, 500, "Server Error", hdrs=Message(), fp=None)
             return {"status": {}}
 
         monkeypatch.setattr(outpost, "_api_request", fake_api_request)
         run_session_fn = Mock()
 
         outpost.poll_and_dispatch(
-            pool_name="mypool", pool_id="outpost_env-abc",
-            api_url="https://api.example.com", run_session_fn=run_session_fn,
+            pool_name="mypool",
+            pool_id="outpost_env-abc",
+            api_url="https://api.example.com",
+            run_session_fn=run_session_fn,
         )
 
         run_session_fn.spawn.assert_called_once_with("sess-2")
@@ -170,8 +185,10 @@ class TestPollAndDispatch:
         run_session_fn = Mock()
 
         outpost.poll_and_dispatch(
-            pool_name="mypool", pool_id="outpost_env-abc",
-            api_url="https://api.example.com", run_session_fn=run_session_fn,
+            pool_name="mypool",
+            pool_id="outpost_env-abc",
+            api_url="https://api.example.com",
+            run_session_fn=run_session_fn,
         )
 
         run_session_fn.spawn.assert_not_called()
@@ -187,11 +204,34 @@ class TestPollAndDispatch:
         monkeypatch.setenv("DEVIN_API_URL", "http://caddy:8686")
 
         outpost.poll_and_dispatch(
-            pool_name="mypool", pool_id="outpost_env-abc",
-            api_url="https://api.example.com", run_session_fn=Mock(),
+            pool_name="mypool",
+            pool_id="outpost_env-abc",
+            api_url="https://api.example.com",
+            run_session_fn=Mock(),
         )
 
         assert api_urls_used == ["http://caddy:8686"]
+
+    def test_releases_the_claim_when_dispatch_spawn_fails(self, monkeypatch):
+        def fake_api_request(api_url, token, method, path, body=None):
+            return _pending("sess-1") if method == "GET" else {"status": {}}
+
+        release = Mock()
+        monkeypatch.setattr(outpost, "_api_request", fake_api_request)
+        monkeypatch.setattr(outpost, "_release", release)
+        run_session_fn = Mock()
+        run_session_fn.spawn.side_effect = RuntimeError("modal spawn failed")
+
+        outpost.poll_and_dispatch(
+            pool_name="mypool",
+            pool_id="outpost_env-abc",
+            api_url="https://api.example.com",
+            run_session_fn=run_session_fn,
+        )
+
+        release.assert_called_once_with(
+            "https://api.example.com", "test-token", "sess-1", "modal-mypool"
+        )
 
 
 # ------------------------------------------------------------------------------------------------
@@ -201,7 +241,7 @@ class TestPollAndDispatch:
 
 @pytest.fixture
 def secret():
-    return SimpleNamespace(name="github-clone-token")
+    return _secret_ref("github-clone-token")
 
 
 @pytest.fixture
@@ -219,21 +259,44 @@ class TestClonePrivateRepoValidation:
                 fake_image, bad_repo_url, "/root/workspace/x", token_secret=secret
             )
 
-    @pytest.mark.parametrize("bad_env_var", ["123TOKEN", "GIT TOKEN", "", "GIT-TOKEN"])
+    @pytest.mark.parametrize(
+        "bad_repo_url",
+        [
+            "http://github.com/org/repo",
+            "ssh://github.com/org/repo",
+            "file:///tmp/repo",
+            "https://user:token@github.com/org/repo",
+            "https://github.com/org/repo#main",
+        ],
+    )
+    def test_rejects_repo_urls_that_would_not_be_scrubbed_cleanly(
+        self, fake_image, secret, bad_repo_url
+    ):
+        with pytest.raises(ValueError):
+            outpost.clone_private_repo(
+                fake_image, bad_repo_url, "/root/workspace/x", token_secret=secret
+            )
+
+    @pytest.mark.parametrize("bad_env_var", ["123TOKEN", "GIT TOKEN", "", "GIT-TOKEN", "TØKEN"])
     def test_rejects_a_token_env_var_that_is_not_a_shell_identifier(
         self, fake_image, secret, bad_env_var
     ):
         with pytest.raises(ValueError, match="valid shell identifier"):
             outpost.clone_private_repo(
-                fake_image, "https://github.com/org/repo", "/root/workspace/x",
-                token_secret=secret, token_env_var=bad_env_var,
+                fake_image,
+                "https://github.com/org/repo",
+                "/root/workspace/x",
+                token_secret=secret,
+                token_env_var=bad_env_var,
             )
 
 
 class TestClonePrivateRepoWiring:
     def test_passes_the_secret_through_to_run_commands(self, fake_image, secret):
         outpost.clone_private_repo(
-            fake_image, "https://github.com/org/repo", "/root/workspace/repo",
+            fake_image,
+            "https://github.com/org/repo",
+            "/root/workspace/repo",
             token_secret=secret,
         )
 
@@ -241,7 +304,9 @@ class TestClonePrivateRepoWiring:
 
     def test_returns_the_image_that_run_commands_produces(self, fake_image, secret):
         result = outpost.clone_private_repo(
-            fake_image, "https://github.com/org/repo", "/root/workspace/repo",
+            fake_image,
+            "https://github.com/org/repo",
+            "/root/workspace/repo",
             token_secret=secret,
         )
 
@@ -268,7 +333,7 @@ def fake_git(tmp_path):
     git_path = tmp_path / "git"
     git_path.write_text(
         "#!/bin/sh\n"
-        "for a in \"$@\"; do printf '%s\\n' \"$a\" >> \"$GIT_LOG\"; done\n"
+        'for a in "$@"; do printf \'%s\\n\' "$a" >> "$GIT_LOG"; done\n'
         "printf -- '---\\n' >> \"$GIT_LOG\"\n"
     )
     git_path.chmod(0o755)
@@ -295,8 +360,10 @@ class TestClonePrivateRepoShellCommand:
     def test_substitutes_the_real_secret_value_into_the_clone_url(self, tmp_path, fake_git):
         image = Mock()
         outpost.clone_private_repo(
-            image, "https://github.com/acme/widgets", "/root/workspace/widgets",
-            token_secret=SimpleNamespace(name="github-clone-token"),
+            image,
+            "https://github.com/acme/widgets",
+            "/root/workspace/widgets",
+            token_secret=_secret_ref("github-clone-token"),
         )
         [command] = image.run_commands.call_args.args
 
@@ -310,7 +377,11 @@ class TestClonePrivateRepoShellCommand:
             "/root/workspace/widgets",
         ]
         assert remote_argv == [
-            "-C", "/root/workspace/widgets", "remote", "set-url", "origin",
+            "-C",
+            "/root/workspace/widgets",
+            "remote",
+            "set-url",
+            "origin",
             "https://github.com/acme/widgets",
         ]
 
@@ -320,8 +391,10 @@ class TestClonePrivateRepoShellCommand:
         -- only ever sees the plain repo_url, never the credentialed one."""
         image = Mock()
         outpost.clone_private_repo(
-            image, "https://github.com/acme/widgets", "/root/workspace/widgets",
-            token_secret=SimpleNamespace(name="github-clone-token"),
+            image,
+            "https://github.com/acme/widgets",
+            "/root/workspace/widgets",
+            token_secret=_secret_ref("github-clone-token"),
         )
         [command] = image.run_commands.call_args.args
 
@@ -333,8 +406,10 @@ class TestClonePrivateRepoShellCommand:
     def test_fails_fast_with_a_clear_message_when_the_token_is_unset(self, tmp_path, fake_git):
         image = Mock()
         outpost.clone_private_repo(
-            image, "https://github.com/acme/widgets", "/root/workspace/widgets",
-            token_secret=SimpleNamespace(name="github-clone-token"),
+            image,
+            "https://github.com/acme/widgets",
+            "/root/workspace/widgets",
+            token_secret=_secret_ref("github-clone-token"),
         )
         [command] = image.run_commands.call_args.args
 
@@ -350,8 +425,10 @@ class TestClonePrivateRepoShellCommand:
     ):
         image = Mock()
         outpost.clone_private_repo(
-            image, "https://github.com/acme/widgets", "/root/workspace/widgets",
-            token_secret=SimpleNamespace(name=None),
+            image,
+            "https://github.com/acme/widgets",
+            "/root/workspace/widgets",
+            token_secret=_secret_ref(None),
         )
         [command] = image.run_commands.call_args.args
 
@@ -387,8 +464,14 @@ class TestSessionStatus:
             assert path == "/opbeta/outposts/devins?phase=claimed&acceptor_id=modal-mypool"
             return {
                 "items": [
-                    {"metadata": {"session_id": "other-sess"}, "status": {"session_status": "running"}},
-                    {"metadata": {"session_id": "sess-1"}, "status": {"session_status": "suspended"}},
+                    {
+                        "metadata": {"session_id": "other-sess"},
+                        "status": {"session_status": "running"},
+                    },
+                    {
+                        "metadata": {"session_id": "sess-1"},
+                        "status": {"session_status": "suspended"},
+                    },
                 ]
             }
 
@@ -429,7 +512,9 @@ class TestCreateSandbox:
         create = Mock(side_effect=[modal.exception.NotFoundError("Image not found"), fresh_sandbox])
         monkeypatch.setattr(outpost.modal.Sandbox, "create", create)
 
-        result = outpost._create_sandbox(Mock(), base_image, "outpost-x-session-y-snapshot", "/root/workspace", 1800)
+        result = outpost._create_sandbox(
+            Mock(), base_image, "outpost-x-session-y-snapshot", "/root/workspace", 1800
+        )
 
         assert result is fresh_sandbox
         assert create.call_args.kwargs["image"] is base_image
@@ -450,16 +535,47 @@ class TestCreateSandbox:
         assert create.call_count == 1
         assert create.call_args.kwargs["image"] is resumed_image
 
-    def test_falls_back_to_the_base_image_if_a_published_snapshot_is_unusable(self, monkeypatch, capsys):
-        base_image = Mock(name="base_image")
-        fresh_sandbox = Mock(name="fresh_sandbox")
-        create = Mock(side_effect=[RuntimeError("snapshot expired"), fresh_sandbox])
+    def test_propagates_unexpected_snapshot_errors_instead_of_starting_fresh(
+        self, monkeypatch, capsys
+    ):
+        create = Mock(side_effect=RuntimeError("modal API unavailable"))
         monkeypatch.setattr(outpost.modal.Sandbox, "create", create)
-        monkeypatch.setattr(outpost.modal.Image, "from_name", Mock(return_value=Mock(name="resumed_image")))
+        monkeypatch.setattr(
+            outpost.modal.Image, "from_name", Mock(return_value=Mock(name="resumed_image"))
+        )
 
-        result = outpost._create_sandbox(Mock(), base_image, "outpost-x-session-y-snapshot", "/root/workspace", 1800)
+        with pytest.raises(RuntimeError, match="modal API unavailable"):
+            outpost._create_sandbox(
+                Mock(),
+                Mock(name="base_image"),
+                "outpost-x-session-y-snapshot",
+                "/root/workspace",
+                1800,
+            )
 
-        assert result is fresh_sandbox
-        assert create.call_count == 2
-        assert create.call_args.kwargs["image"] is base_image  # the retry uses the base image
-        assert "unusable" in capsys.readouterr().err  # unlike the never-published case, this warns
+        assert create.call_count == 1
+        assert capsys.readouterr().err == ""
+
+
+class TestRunSession:
+    def test_releases_the_claim_when_sandbox_creation_fails(self, monkeypatch):
+        release = Mock()
+        monkeypatch.setattr(outpost, "_release", release)
+        monkeypatch.setattr(
+            outpost, "_create_sandbox", Mock(side_effect=RuntimeError("no capacity"))
+        )
+
+        with pytest.raises(RuntimeError, match="no capacity"):
+            outpost.run_session(
+                Mock(),
+                Mock(),
+                "sess-1",
+                pool_name="mypool",
+                pool_id="outpost_env-abc",
+                api_url="https://api.example.com",
+                sidecar_image_id="im-123",
+            )
+
+        release.assert_called_once_with(
+            "https://api.example.com", "test-token", "sess-1", "modal-mypool"
+        )
