@@ -374,3 +374,92 @@ class TestWorkerImage:
     def test_builds_regardless_of_optional_dependency_flags(self, install_ffmpeg, install_chrome):
         image = outpost.worker_image(install_ffmpeg=install_ffmpeg, install_chrome=install_chrome)
         assert isinstance(image, modal.Image)
+
+
+# ------------------------------------------------------------------------------------------------
+# _session_status
+# ------------------------------------------------------------------------------------------------
+
+
+class TestSessionStatus:
+    def test_finds_the_matching_session_by_id(self, monkeypatch):
+        def fake_api_request(api_url, token, method, path, body=None):
+            assert path == "/opbeta/outposts/devins?phase=claimed&acceptor_id=modal-mypool"
+            return {
+                "items": [
+                    {"metadata": {"session_id": "other-sess"}, "status": {"session_status": "running"}},
+                    {"metadata": {"session_id": "sess-1"}, "status": {"session_status": "suspended"}},
+                ]
+            }
+
+        monkeypatch.setattr(outpost, "_api_request", fake_api_request)
+
+        status = outpost._session_status("https://api.example.com", "tok", "sess-1", "modal-mypool")
+
+        assert status == "suspended"
+
+    def test_returns_none_when_session_is_no_longer_claimed(self, monkeypatch):
+        monkeypatch.setattr(outpost, "_api_request", lambda *a, **k: {"items": []})
+
+        status = outpost._session_status("https://api.example.com", "tok", "sess-1", "modal-mypool")
+
+        assert status is None
+
+    def test_returns_none_when_the_request_itself_fails(self, monkeypatch):
+        def fake_api_request(*args, **kwargs):
+            raise urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr(outpost, "_api_request", fake_api_request)
+
+        status = outpost._session_status("https://api.example.com", "tok", "sess-1", "modal-mypool")
+
+        assert status is None
+
+
+# ------------------------------------------------------------------------------------------------
+# _create_sandbox -- Image.from_name is a lazy reference, so "no snapshot published yet" and
+# "published snapshot is gone/unusable" both only surface once Sandbox.create resolves it.
+# ------------------------------------------------------------------------------------------------
+
+
+class TestCreateSandbox:
+    def test_uses_the_base_image_when_no_snapshot_was_ever_published(self, monkeypatch, capsys):
+        base_image = Mock(name="base_image")
+        fresh_sandbox = Mock(name="fresh_sandbox")
+        create = Mock(side_effect=[modal.exception.NotFoundError("Image not found"), fresh_sandbox])
+        monkeypatch.setattr(outpost.modal.Sandbox, "create", create)
+
+        result = outpost._create_sandbox(Mock(), base_image, "outpost-x-session-y-snapshot", "/root/workspace", 1800)
+
+        assert result is fresh_sandbox
+        assert create.call_args.kwargs["image"] is base_image
+        assert capsys.readouterr().err == ""  # the common case shouldn't print a warning
+
+    def test_resumes_from_the_snapshot_when_one_exists(self, monkeypatch):
+        resumed_sandbox = Mock(name="resumed_sandbox")
+        create = Mock(return_value=resumed_sandbox)
+        monkeypatch.setattr(outpost.modal.Sandbox, "create", create)
+        resumed_image = Mock(name="resumed_image")
+        monkeypatch.setattr(outpost.modal.Image, "from_name", Mock(return_value=resumed_image))
+
+        result = outpost._create_sandbox(
+            Mock(), Mock(name="base_image"), "outpost-x-session-y-snapshot", "/root/workspace", 1800
+        )
+
+        assert result is resumed_sandbox
+        assert create.call_count == 1
+        assert create.call_args.kwargs["image"] is resumed_image
+
+    def test_falls_back_to_the_base_image_if_a_published_snapshot_is_unusable(self, monkeypatch, capsys):
+        base_image = Mock(name="base_image")
+        fresh_sandbox = Mock(name="fresh_sandbox")
+        create = Mock(side_effect=[RuntimeError("snapshot expired"), fresh_sandbox])
+        monkeypatch.setattr(outpost.modal.Sandbox, "create", create)
+        monkeypatch.setattr(outpost.modal.Image, "from_name", Mock(return_value=Mock(name="resumed_image")))
+
+        result = outpost._create_sandbox(Mock(), base_image, "outpost-x-session-y-snapshot", "/root/workspace", 1800)
+
+        assert result is fresh_sandbox
+        assert create.call_count == 2
+        assert create.call_args.kwargs["image"] is base_image  # the retry uses the base image
+        assert "unusable" in capsys.readouterr().err  # unlike the never-published case, this warns

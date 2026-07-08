@@ -174,6 +174,47 @@ def _release(api_url, token, session_id, acceptor_id):
     )
 
 
+def _session_status(api_url, token, session_id, acceptor_id) -> str | None:
+    """The Outposts API's status.session_status for this session (pending/running/suspended/
+    terminated), or None if it's not (or no longer) listed as claimed by us."""
+    try:
+        claimed = _api_request(
+            api_url, token, "GET", f"/opbeta/outposts/devins?phase=claimed&acceptor_id={acceptor_id}"
+        )
+    except urllib.error.URLError:
+        return None
+    for item in claimed.get("items", []):
+        if item.get("metadata", {}).get("session_id") == session_id:
+            return item.get("status", {}).get("session_status")
+    return None
+
+
+def _snapshot_name(pool_name: str, session_id: str) -> str:
+    """The published-Image name a session's filesystem snapshot lives under -- the name itself
+    *is* the session_id -> snapshot lookup, so there's no separate table to keep in sync."""
+    return f"outpost-{pool_name}-session-{session_id}-snapshot"
+
+
+def _create_sandbox(
+    app: modal.App, image: modal.Image, resume_name: str, workdir: str, timeout: int
+) -> modal.Sandbox:
+    """Start from a published snapshot for `resume_name` if one exists and is still usable
+    (`Image.from_name` is a lazy reference -- nothing about a missing/expired snapshot surfaces
+    until Sandbox.create actually resolves it), otherwise fall back to the base image."""
+    try:
+        sb = modal.Sandbox.create(
+            "sleep", "infinity",
+            app=app, image=modal.Image.from_name(resume_name), workdir=workdir, timeout=timeout,
+        )
+        print(f"resuming from snapshot {resume_name!r}")
+        return sb
+    except modal.exception.NotFoundError:
+        pass  # no snapshot for this session yet -- the common case, nothing to log
+    except Exception as e:
+        print(f"resume snapshot {resume_name!r} unusable ({e}), starting fresh", file=sys.stderr)
+    return modal.Sandbox.create("sleep", "infinity", app=app, image=image, workdir=workdir, timeout=timeout)
+
+
 def run_session(
     app: modal.App,
     image: modal.Image,
@@ -185,19 +226,24 @@ def run_session(
     sidecar_image_id: str,
     session_timeout_secs: int = SESSION_TIMEOUT_SECS,
 ):
-    """Run one claimed session to completion. Call this from the pool file's `run_session`.
+    """Run one claimed session to completion (or suspension). Call this from the pool file's
+    `run_session`.
 
     Devin requires every session repo checked out as a direct subdirectory of the working
     directory `devin worker start` runs from. `sb.exec()` below inherits this Sandbox's `workdir`
     (it doesn't pass its own), so wherever `image` clones repos to must match this constant.
+
+    If the session comes back as `suspended` rather than fully done, its filesystem is snapshotted
+    before the Sandbox is torn down, and that snapshot is what a later run_session for the same
+    session_id resumes from -- per Devin's Outposts docs: "Terminate the machine when the worker
+    exits... if your pool is resumable, snapshot the machine before terminating so you can restore
+    it if the session resumes."
     """
     acceptor_id = f"modal-{pool_name}"
     token = os.environ["DEVIN_OUTPOSTS_TOKEN"]
+    snapshot_name = _snapshot_name(pool_name, session_id)
 
-    sb = modal.Sandbox.create(
-        "sleep", "infinity",
-        app=app, image=image, workdir="/root/workspace", timeout=session_timeout_secs,
-    )
+    sb = _create_sandbox(app, image, snapshot_name, "/root/workspace", session_timeout_secs)
     try:
         sb._experimental_sidecars.create(
             "caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile",
@@ -233,6 +279,15 @@ def run_session(
             print(f"[{session_id}] {line}", end="")
         returncode = worker_proc.wait()
         print(f"[{session_id}] devin worker exited: {returncode}")
+
+        status = _session_status(api_url, token, session_id, acceptor_id)
+        if status == "suspended":
+            print(f"[{session_id}] session suspended, snapshotting filesystem for resume")
+            sb.snapshot_filesystem().publish(snapshot_name)
+        # else: no explicit cleanup for a stale snapshot from an earlier suspend -- there's no
+        # unpublish API, so a since-terminated session's old snapshot just ages out via the
+        # underlying Image's own ttl (see snapshot_filesystem's ttl param, default 30 days).
+
         if returncode != 0:
             _release(api_url, token, session_id, acceptor_id)
             print(f"[{session_id}] released claim after nonzero exit")
