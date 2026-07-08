@@ -129,9 +129,15 @@ class TestPollAndDispatch:
             pool_id="outpost_env-abc",
             api_url="https://api.example.com",
             run_session_fn=run_session_fn,
+            sidecar_image_id="im-sidecar",
         )
 
-        run_session_fn.spawn.assert_has_calls([call("sess-1"), call("sess-2")])
+        run_session_fn.spawn.assert_has_calls(
+            [
+                call("sess-1", sidecar_image_id="im-sidecar"),
+                call("sess-2", sidecar_image_id="im-sidecar"),
+            ]
+        )
         assert claimed_paths == [
             "/opbeta/outposts/devins/sess-1/claim",
             "/opbeta/outposts/devins/sess-2/claim",
@@ -153,9 +159,10 @@ class TestPollAndDispatch:
             pool_id="outpost_env-abc",
             api_url="https://api.example.com",
             run_session_fn=run_session_fn,
+            sidecar_image_id="im-sidecar",
         )
 
-        run_session_fn.spawn.assert_called_once_with("sess-2")
+        run_session_fn.spawn.assert_called_once_with("sess-2", sidecar_image_id="im-sidecar")
 
     def test_keeps_going_after_an_unexpected_claim_error(self, monkeypatch):
         def fake_api_request(api_url, token, method, path, body=None):
@@ -173,13 +180,51 @@ class TestPollAndDispatch:
             pool_id="outpost_env-abc",
             api_url="https://api.example.com",
             run_session_fn=run_session_fn,
+            sidecar_image_id="im-sidecar",
         )
 
-        run_session_fn.spawn.assert_called_once_with("sess-2")
+        run_session_fn.spawn.assert_called_once_with("sess-2", sidecar_image_id="im-sidecar")
+
+    def test_keeps_going_after_a_malformed_claim_response(self, monkeypatch):
+        def fake_api_request(api_url, token, method, path, body=None):
+            if method == "GET":
+                return _pending("sess-1", "sess-2")
+            if "sess-1" in path:
+                raise ValueError("not a JSON object")
+            return {"status": {}}
+
+        monkeypatch.setattr(outpost, "_api_request", fake_api_request)
+        run_session_fn = Mock()
+
+        outpost.poll_and_dispatch(
+            pool_name="mypool",
+            pool_id="outpost_env-abc",
+            api_url="https://api.example.com",
+            run_session_fn=run_session_fn,
+            sidecar_image_id="im-sidecar",
+        )
+
+        run_session_fn.spawn.assert_called_once_with("sess-2", sidecar_image_id="im-sidecar")
 
     def test_returns_quietly_when_polling_itself_fails(self, monkeypatch):
         def fake_api_request(*args, **kwargs):
             raise urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr(outpost, "_api_request", fake_api_request)
+        run_session_fn = Mock()
+
+        outpost.poll_and_dispatch(
+            pool_name="mypool",
+            pool_id="outpost_env-abc",
+            api_url="https://api.example.com",
+            run_session_fn=run_session_fn,
+        )
+
+        run_session_fn.spawn.assert_not_called()
+
+    def test_returns_quietly_when_polling_returns_malformed_json(self, monkeypatch):
+        def fake_api_request(*args, **kwargs):
+            raise ValueError("not a JSON object")
 
         monkeypatch.setattr(outpost, "_api_request", fake_api_request)
         run_session_fn = Mock()
@@ -212,6 +257,62 @@ class TestPollAndDispatch:
 
         assert api_urls_used == ["http://caddy:8686"]
 
+    def test_builds_the_sidecar_before_claiming_when_no_id_is_supplied(self, monkeypatch):
+        events = []
+
+        def fake_api_request(api_url, token, method, path, body=None):
+            events.append((method, path))
+            return _pending("sess-1") if method == "GET" else {"status": {}}
+
+        def fake_build_sidecar_image_id(pool_name):
+            events.append(("BUILD", pool_name))
+            return "im-built-sidecar"
+
+        monkeypatch.setattr(outpost, "_api_request", fake_api_request)
+        monkeypatch.setattr(outpost, "build_sidecar_image_id", fake_build_sidecar_image_id)
+        run_session_fn = Mock()
+
+        outpost.poll_and_dispatch(
+            pool_name="mypool",
+            pool_id="outpost_env-abc",
+            api_url="https://api.example.com",
+            run_session_fn=run_session_fn,
+        )
+
+        assert events == [
+            ("GET", "/opbeta/outposts/devins?pool=outpost_env-abc&phase=pending"),
+            ("BUILD", "mypool"),
+            ("POST", "/opbeta/outposts/devins/sess-1/claim"),
+        ]
+        run_session_fn.spawn.assert_called_once_with(
+            "sess-1", sidecar_image_id="im-built-sidecar"
+        )
+
+    def test_does_not_claim_when_sidecar_image_resolution_fails(self, monkeypatch):
+        api_calls = []
+
+        def fake_api_request(api_url, token, method, path, body=None):
+            api_calls.append((method, path))
+            return _pending("sess-1")
+
+        monkeypatch.setattr(outpost, "_api_request", fake_api_request)
+        monkeypatch.setattr(
+            outpost,
+            "build_sidecar_image_id",
+            Mock(side_effect=RuntimeError("modal unavailable")),
+        )
+        run_session_fn = Mock()
+
+        outpost.poll_and_dispatch(
+            pool_name="mypool",
+            pool_id="outpost_env-abc",
+            api_url="https://api.example.com",
+            run_session_fn=run_session_fn,
+        )
+
+        assert api_calls == [("GET", "/opbeta/outposts/devins?pool=outpost_env-abc&phase=pending")]
+        run_session_fn.spawn.assert_not_called()
+
     def test_releases_the_claim_when_dispatch_spawn_fails(self, monkeypatch):
         def fake_api_request(api_url, token, method, path, body=None):
             return _pending("sess-1") if method == "GET" else {"status": {}}
@@ -227,6 +328,7 @@ class TestPollAndDispatch:
             pool_id="outpost_env-abc",
             api_url="https://api.example.com",
             run_session_fn=run_session_fn,
+            sidecar_image_id="im-sidecar",
         )
 
         release.assert_called_once_with(
@@ -317,11 +419,9 @@ class TestClonePrivateRepoWiring:
 # clone_private_repo -- the shell command it builds, run for real through `sh`
 #
 # `run_commands`'s argument is a shell script that will execute verbatim during the image build.
-# Asserting on the string misses exactly the bug this once had: shlex.quote-ing the whole
-# credential URL wrapped it in single quotes, which silently disables `$VAR` expansion in
-# sh/bash -- git received the literal 8 characters "$GIT_CLONE_TOKEN", not the actual secret.
-# Running the command for real through `sh`, with a fake `git` on PATH, is what actually proves
-# the secret gets substituted rather than passed through unexpanded.
+# Running the command for real through `sh`, with a fake `git` on PATH, proves the shell script
+# invokes git with a plain repo URL and leaves the secret in GIT_ASKPASS instead of argv/loggable
+# URLs.
 # ------------------------------------------------------------------------------------------------
 
 
@@ -357,7 +457,7 @@ def _git_invocations(fake_git):
 
 
 class TestClonePrivateRepoShellCommand:
-    def test_substitutes_the_real_secret_value_into_the_clone_url(self, tmp_path, fake_git):
+    def test_clones_with_plain_url_and_resets_the_remote(self, tmp_path, fake_git):
         image = Mock()
         outpost.clone_private_repo(
             image,
@@ -370,10 +470,12 @@ class TestClonePrivateRepoShellCommand:
         result = _run_shell(command, tmp_path, fake_git, {"GIT_CLONE_TOKEN": "s3cr3t-value"})
 
         assert result.returncode == 0, result.stderr
+        assert "GIT_ASKPASS" in command
+        assert "x-access-token:s3cr3t-value" not in command
         clone_argv, remote_argv = _git_invocations(fake_git)
         assert clone_argv == [
             "clone",
-            "https://x-access-token:s3cr3t-value@github.com/acme/widgets",
+            "https://github.com/acme/widgets",
             "/root/workspace/widgets",
         ]
         assert remote_argv == [
@@ -401,6 +503,7 @@ class TestClonePrivateRepoShellCommand:
         _run_shell(command, tmp_path, fake_git, {"GIT_CLONE_TOKEN": "s3cr3t-value"})
 
         _clone_argv, remote_argv = _git_invocations(fake_git)
+        assert not any("s3cr3t-value" in arg for arg in _clone_argv)
         assert not any("s3cr3t-value" in arg for arg in remote_argv)
 
     def test_fails_fast_with_a_clear_message_when_the_token_is_unset(self, tmp_path, fake_git):

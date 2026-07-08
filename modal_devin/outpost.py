@@ -10,6 +10,8 @@ themselves; it owns everything else (the sidecar image, the HTTP client, the act
 bodies) and the pool file's `run_session`/`poll_and_dispatch` are thin wrappers that call in here.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -18,10 +20,13 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Collection, Iterable, Mapping
+from typing import Protocol, cast
 
 import modal
+
+type JsonValue = str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]
+type JsonObject = dict[str, JsonValue]
 
 DEVIN_CLI_INSTALL = "curl -fsSL https://cli.devin.ai/install.sh | bash || true"
 DEVIN_BIN = "/root/.local/bin/devin"
@@ -59,6 +64,25 @@ CHROME_PATH = "/usr/bin/chromium"
 _SHELL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+class SessionRunner(Protocol):
+    """A Modal function-like object that can spawn a session runner."""
+
+    def spawn(self, session_id: str, *, sidecar_image_id: str) -> object: ...
+
+
+class _SidecarManager(Protocol):
+    """The narrow subset of Modal's experimental sidecar manager we rely on."""
+
+    def create(
+        self,
+        *args: str,
+        name: str,
+        image: modal.Image,
+        env: dict[str, str],
+        secrets: Collection[modal.Secret],
+    ) -> object: ...
+
+
 def worker_image(
     *,
     python_version: str = "3.12",
@@ -77,7 +101,7 @@ def worker_image(
     """
     image = (
         modal.Image.debian_slim(python_version=python_version)
-        .apt_install("git", "curl", "ca-certificates")
+        .apt_install("git", "curl", "ca-certificates", "tar")
         .run_commands(DEVIN_CLI_INSTALL)
         .run_commands(f"test -x {DEVIN_BIN}")
         .run_commands("mkdir -p /root/workspace")
@@ -97,17 +121,13 @@ def clone_private_repo(
     token_secret: modal.Secret,
     token_env_var: str = "GIT_CLONE_TOKEN",
 ) -> modal.Image:
-    """Clone a private repo into `dest` (e.g. /root/workspace/<repo>) using a token from
-    `token_secret`, without leaving the token in the built image.
+    """Clone a private repo into `dest` using a token from `token_secret`.
 
-    DO NOT clone with the token embedded in the URL and stop there -- `git clone
-    https://x-access-token:$TOKEN@host/...` writes that URL straight into `dest/.git/config`,
-    which is then baked into the image layer. That image is what the Devin agent's own sandbox
-    runs in, so an unscrubbed token in .git/config hands the agent a live credential to your git
-    host. This clones with the token, then immediately strips it back out of `.git/config` via
-    `git remote set-url`, in the same `run_commands` layer so the credential is never part of the
-    committed filesystem. `token_secret`'s env var itself is build-scoped and doesn't persist into
-    the final image regardless, but that alone doesn't save you from this file-level leak.
+    DO NOT clone with the token embedded in the URL. Git stores the clone URL in
+    `dest/.git/config`, and many failures echo the URL to logs. This uses a temporary
+    `GIT_ASKPASS` helper, so the token stays in Modal's build-scoped secret environment rather
+    than command argv, logs, or the final remote URL. The helper is deleted before the layer
+    commits, and the remote URL is explicitly reset to the credential-free `repo_url`.
 
     `repo_url` should be the plain https URL (no embedded credentials), e.g.
     "https://github.com/your-org/app". Assumes a GitHub-style PAT or App installation token
@@ -124,31 +144,36 @@ def clone_private_repo(
     if parsed.fragment:
         raise ValueError("repo_url must not include a URL fragment")
 
-    repo_suffix = f"{parsed.netloc}{parsed.path}"
-    if parsed.query:
-        repo_suffix = f"{repo_suffix}?{parsed.query}"
     plain_repo_url = urllib.parse.urlunsplit(
         (parsed.scheme, parsed.netloc, parsed.path, parsed.query, "")
-    )
-
-    # Single-quoted literals concatenated around a double-quoted `"$VAR"` expansion: only the
-    # token reference is subject to shell expansion, nothing else in repo_url/dest is interpreted.
-    # (An earlier version shlex.quote'd the whole URL as one single-quoted string, which silently
-    # sent the literal text "$GIT_CLONE_TOKEN" instead of the actual secret to git -- broken.)
-    auth_url = (
-        shlex.quote("https://x-access-token:")
-        + f'"${token_env_var}"'
-        + shlex.quote(f"@{repo_suffix}")
     )
     secret_desc = token_secret.name or "<secret>"
     fail_msg = (
         f"{token_env_var} is empty -- does secret {secret_desc} have a key named {token_env_var}?"
     )
+    askpass_script = f"""\
+#!/bin/sh
+case "$1" in
+    *Username*) printf '%s\\n' 'x-access-token' ;;
+    *) printf '%s\\n' "${{{token_env_var}}}" ;;
+esac
+"""
     return image.run_commands(
-        f'test -n "${token_env_var}" '
-        f"|| {{ echo {shlex.quote(fail_msg)} >&2; exit 1; }} "
-        f"&& git clone {auth_url} {shlex.quote(dest)} "
-        f"&& git -C {shlex.quote(dest)} remote set-url origin {shlex.quote(plain_repo_url)}",
+        "\n".join(
+            [
+                "set -eu",
+                f'test -n "${{{token_env_var}:-}}" '
+                f"|| {{ echo {shlex.quote(fail_msg)} >&2; exit 1; }}",
+                "askpass=$(mktemp /tmp/modal-devin-askpass.XXXXXX)",
+                'trap \'rm -f "$askpass"\' EXIT',
+                f"cat > \"$askpass\" <<'MODAL_DEVIN_ASKPASS'\n{askpass_script}MODAL_DEVIN_ASKPASS",
+                'chmod 700 "$askpass"',
+                "GIT_TERMINAL_PROMPT=0 "
+                'GIT_ASKPASS="$askpass" '
+                f"git clone {shlex.quote(plain_repo_url)} {shlex.quote(dest)}",
+                f"git -C {shlex.quote(dest)} remote set-url origin {shlex.quote(plain_repo_url)}",
+            ]
+        ),
         secrets=[token_secret],
     )
 
@@ -176,7 +201,19 @@ def build_sidecar_image_id(pool_name: str) -> str:
     when pool files call this at module scope.
     """
     build_app = modal.App.lookup(f"outpost-pool-{pool_name}-image-builds", create_if_missing=True)
-    return _sidecar_image().build(build_app).object_id
+    image_id = _sidecar_image().build(build_app).object_id
+    if image_id is None:
+        raise RuntimeError("Modal returned a sidecar image without an object id")
+    return image_id
+
+
+def _json_object_from_response(body: bytes, *, url: str) -> JsonObject:
+    if not body:
+        return {}
+    parsed = json.loads(body)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"Expected a JSON object from {url}, got {type(parsed).__name__}")
+    return cast(JsonObject, parsed)
 
 
 def _api_request(
@@ -184,10 +221,10 @@ def _api_request(
     token: str,
     method: str,
     path: str,
-    body: Mapping[str, Any] | None = None,
+    body: Mapping[str, JsonValue] | None = None,
     *,
     timeout: float = API_TIMEOUT_SECS,
-) -> Any:
+) -> JsonObject:
     data = json.dumps(body).encode() if body is not None else None
     url = f"{api_url.rstrip('/')}/{path.lstrip('/')}"
     req = urllib.request.Request(url, data=data, method=method)
@@ -195,8 +232,7 @@ def _api_request(
     if data is not None:
         req.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        response_body = resp.read()
-        return json.loads(response_body) if response_body else {}
+        return _json_object_from_response(resp.read(), url=url)
 
 
 def _devin_path(session_id: str, action: str) -> str:
@@ -207,7 +243,7 @@ def _query_path(path: str, query: Mapping[str, str]) -> str:
     return f"{path}?{urllib.parse.urlencode(query)}"
 
 
-def _release(api_url, token, session_id, acceptor_id):
+def _release(api_url: str, token: str, session_id: str, acceptor_id: str) -> None:
     _api_request(
         api_url,
         token,
@@ -226,13 +262,42 @@ def _release_safely(
 ) -> None:
     try:
         _release(api_url, token, session_id, acceptor_id)
-    except urllib.error.URLError as e:
+    except (urllib.error.URLError, ValueError) as e:
         print(f"[{session_id}] failed to release claim after {reason}: {e}", file=sys.stderr)
     else:
         print(f"[{session_id}] released claim after {reason}")
 
 
-def _session_status(api_url, token, session_id, acceptor_id) -> str | None:
+def _response_items(response: Mapping[str, JsonValue]) -> Iterable[Mapping[str, JsonValue]]:
+    items = response.get("items")
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if isinstance(item, dict):
+            yield item
+
+
+def _nested_string(
+    mapping: Mapping[str, JsonValue],
+    outer_key: str,
+    inner_key: str,
+) -> str | None:
+    outer = mapping.get(outer_key)
+    if not isinstance(outer, dict):
+        return None
+    value = outer.get(inner_key)
+    return value if isinstance(value, str) else None
+
+
+def _session_id_from_item(item: Mapping[str, JsonValue]) -> str | None:
+    return _nested_string(item, "metadata", "session_id")
+
+
+def _claim_deadline_from_response(response: Mapping[str, JsonValue]) -> str | None:
+    return _nested_string(response, "status", "claim_deadline")
+
+
+def _session_status(api_url: str, token: str, session_id: str, acceptor_id: str) -> str | None:
     """The Outposts API's status.session_status for this session (pending/running/suspended/
     terminated), or None if it's not (or no longer) listed as claimed by us."""
     try:
@@ -245,11 +310,11 @@ def _session_status(api_url, token, session_id, acceptor_id) -> str | None:
                 {"phase": "claimed", "acceptor_id": acceptor_id},
             ),
         )
-    except urllib.error.URLError:
+    except (urllib.error.URLError, ValueError):
         return None
-    for item in claimed.get("items", []):
-        if item.get("metadata", {}).get("session_id") == session_id:
-            return item.get("status", {}).get("session_status")
+    for item in _response_items(claimed):
+        if _session_id_from_item(item) == session_id:
+            return _nested_string(item, "status", "session_status")
     return None
 
 
@@ -286,6 +351,27 @@ def _create_sandbox(
     )
 
 
+def _create_caddy_sidecar(
+    sb: modal.Sandbox,
+    sidecar_image_id: str,
+    api_url: str,
+    token: str,
+) -> None:
+    sidecars = cast(_SidecarManager, sb._experimental_sidecars)
+    sidecars.create(
+        "caddy",
+        "run",
+        "--config",
+        "/etc/caddy/Caddyfile",
+        "--adapter",
+        "caddyfile",
+        name="caddy",
+        image=modal.Image.from_id(sidecar_image_id),
+        env={"SIDECAR_PORT": str(SIDECAR_PORT), "UPSTREAM_URL": api_url},
+        secrets=[modal.Secret.from_dict({"DEVIN_OUTPOSTS_TOKEN": token})],
+    )
+
+
 def run_session(
     app: modal.App,
     image: modal.Image,
@@ -294,9 +380,9 @@ def run_session(
     pool_name: str,
     pool_id: str,
     api_url: str,
-    sidecar_image_id: str | None = None,
+    sidecar_image_id: str,
     session_timeout_secs: int = SESSION_TIMEOUT_SECS,
-):
+) -> None:
     """Run one claimed session to completion (or suspension). Call this from the pool file's
     `run_session`.
 
@@ -316,21 +402,8 @@ def run_session(
 
     sb: modal.Sandbox | None = None
     try:
-        if sidecar_image_id is None:
-            sidecar_image_id = build_sidecar_image_id(pool_name)
         sb = _create_sandbox(app, image, snapshot_name, "/root/workspace", session_timeout_secs)
-        sb._experimental_sidecars.create(
-            "caddy",
-            "run",
-            "--config",
-            "/etc/caddy/Caddyfile",
-            "--adapter",
-            "caddyfile",
-            name="caddy",
-            image=modal.Image.from_id(sidecar_image_id),
-            env={"SIDECAR_PORT": str(SIDECAR_PORT), "UPSTREAM_URL": api_url},
-            secrets=[modal.Secret.from_dict({"DEVIN_OUTPOSTS_TOKEN": token})],
-        )
+        _create_caddy_sidecar(sb, sidecar_image_id, api_url, token)
 
         wait_proc = sb.exec(
             "sh",
@@ -384,7 +457,14 @@ def run_session(
             sb.terminate()
 
 
-def poll_and_dispatch(*, pool_name: str, pool_id: str, api_url: str, run_session_fn):
+def poll_and_dispatch(
+    *,
+    pool_name: str,
+    pool_id: str,
+    api_url: str,
+    run_session_fn: SessionRunner,
+    sidecar_image_id: str | None = None,
+) -> None:
     """Poll for pending sessions, atomically claim each, and spawn `run_session_fn` for it.
 
     Call this from the pool file's `poll_and_dispatch`, passing its own `run_session` Function.
@@ -400,12 +480,26 @@ def poll_and_dispatch(*, pool_name: str, pool_id: str, api_url: str, run_session
             "GET",
             _query_path("/opbeta/outposts/devins", {"pool": pool_id, "phase": "pending"}),
         )
-    except urllib.error.URLError as e:
+    except (urllib.error.URLError, ValueError) as e:
         print(f"poll failed: {e}", file=sys.stderr)
         return
 
-    for item in pending.get("items", []):
-        session_id = item["metadata"]["session_id"]
+    pending_items = tuple(_response_items(pending))
+    if not pending_items:
+        return
+
+    if sidecar_image_id is None:
+        try:
+            sidecar_image_id = build_sidecar_image_id(pool_name)
+        except Exception as e:
+            print(f"sidecar image build failed before claiming sessions: {e}", file=sys.stderr)
+            return
+
+    for item in pending_items:
+        session_id = _session_id_from_item(item)
+        if session_id is None:
+            print(f"pending item without metadata.session_id: {item}", file=sys.stderr)
+            continue
         try:
             claim = _api_request(
                 poll_api_url,
@@ -419,11 +513,14 @@ def poll_and_dispatch(*, pool_name: str, pool_id: str, api_url: str, run_session
                 continue
             print(f"[{session_id}] claim failed: {e}", file=sys.stderr)
             continue
+        except (urllib.error.URLError, ValueError) as e:
+            print(f"[{session_id}] claim failed: {e}", file=sys.stderr)
+            continue
 
-        deadline = claim.get("status", {}).get("claim_deadline")
+        deadline = _claim_deadline_from_response(claim)
         print(f"[{session_id}] claimed, claim_deadline={deadline}, dispatching")
         try:
-            run_session_fn.spawn(session_id)
+            run_session_fn.spawn(session_id, sidecar_image_id=sidecar_image_id)
         except Exception as e:
             print(f"[{session_id}] dispatch failed: {e}", file=sys.stderr)
             _release_safely(poll_api_url, token, session_id, acceptor_id, "dispatch failure")
