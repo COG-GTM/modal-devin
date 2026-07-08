@@ -1,12 +1,12 @@
-"""Outpost pool: $pool_name."""
+"""Modal entrypoint for a Devin Outposts pool."""
 
 import modal
 
 from modal_devin import outpost
 
-POOL_NAME = "$pool_name"
-POOL_ID = "$pool_id"
-API_URL = "$api_url"
+POOL_NAME = $pool_name
+POOL_ID = $pool_id
+API_URL = $api_url
 
 # install_ffmpeg/install_chrome default to on (screen recording / browser tools "just work");
 # pass False for either to skip it and get a leaner, faster-to-build image.
@@ -28,8 +28,7 @@ image = outpost.worker_image()
 # )
 
 app = modal.App(f"outpost-pool-{POOL_NAME}")
-secret = modal.Secret.from_name("$secret_name")
-sidecar_image_id = outpost.build_sidecar_image_id(POOL_NAME)
+secret = modal.Secret.from_name($secret_name)
 
 
 @app.function(image=image, secrets=[secret], timeout=outpost.SESSION_TIMEOUT_SECS + 60)
@@ -37,7 +36,6 @@ def run_session(session_id: str):
     outpost.run_session(
         app, image, session_id,
         pool_name=POOL_NAME, pool_id=POOL_ID, api_url=API_URL,
-        sidecar_image_id=sidecar_image_id,
     )
 
 

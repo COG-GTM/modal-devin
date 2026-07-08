@@ -8,6 +8,7 @@ scripted/CI use is unaffected.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -29,6 +30,7 @@ app.command(outpost)
 
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "pool.py.tmpl"
 DEVIN_TOKEN_URL = "https://docs.devin.ai/api-reference/v3/overview"
+_MODULE_STEM_RE = re.compile(r"[^0-9A-Za-z_]+")
 
 # create-next-app-style prompts: "? Question › answer" instead of Rich's default "Question: ".
 _PROMPT_SUFFIX = Text(" › ", style="dim")
@@ -55,7 +57,9 @@ def _mark_answered(question: str, shown_value: str) -> None:
 
 
 def _ask(question: str, **kwargs) -> str:
-    answer = _WizardPrompt.ask(f"[bold green]?[/bold green] [bold]{question}[/bold]", **kwargs).strip()
+    answer = _WizardPrompt.ask(
+        f"[bold green]?[/bold green] [bold]{question}[/bold]", **kwargs
+    ).strip()
     if kwargs.get("password"):
         # Fixed-width mask, not "*" * len(answer): a real token is long enough that echoing its
         # length back as a wall of asterisks is both ugly and a pointless bit of a leak.
@@ -112,9 +116,14 @@ def _run_with_tail(argv: list[str], window: int = 10) -> int:
     The final `window` lines stick around afterward (e.g. modal deploy's own success/URL line)."""
     lines: deque[str] = deque(maxlen=window)
     proc = subprocess.Popen(
-        argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
+    assert proc.stdout is not None
     with Live(console=_console, refresh_per_second=12, transient=True) as live:
         for line in proc.stdout:
             lines.append(line.rstrip())
@@ -158,6 +167,19 @@ def _modal_is_configured() -> bool:
     return bool(_modal_config.get("token_id") and _modal_config.get("token_secret"))
 
 
+def _module_stem(name: str) -> str:
+    stem = _MODULE_STEM_RE.sub("_", name).strip("_").lower()
+    if not stem:
+        raise SystemExit("NAME must contain at least one ASCII letter or digit")
+    if stem[0].isdigit():
+        stem = f"pool_{stem}"
+    return stem
+
+
+def _python_literal(value: str) -> str:
+    return repr(value)
+
+
 @outpost.command
 def create(
     name: str = "",
@@ -197,7 +219,7 @@ def create(
     # DELETE /outposts/pools/{pool_id} instead, so `create` doesn't leave a live pool behind with
     # no local file to show for it.
     out_dir = Path(pools_dir)
-    out_path = out_dir / f"{name.replace('-', '_')}.py"
+    out_path = out_dir / f"{_module_stem(name)}.py"
     if out_path.exists():
         raise SystemExit(f"{out_path} already exists, not overwriting")
 
@@ -215,14 +237,16 @@ def create(
         try:
             result = subprocess.run(
                 ["devin", "worker", "pool", "create", name, "--api-url", api_url],
-                capture_output=True, text=True, env=env,
+                capture_output=True,
+                text=True,
+                env=env,
             )
-        except FileNotFoundError:
+        except FileNotFoundError as e:
             _step_failed("devin worker pool create failed")
             raise SystemExit(
                 "`devin` CLI not found on PATH -- install it with:\n"
                 "  curl -fsSL https://cli.devin.ai/install.sh | bash"
-            )
+            ) from e
         if result.returncode != 0:
             _step_failed(f"devin worker pool create {name} failed")
             raise SystemExit(result.stderr)
@@ -233,19 +257,24 @@ def create(
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
         generated = Template(TEMPLATE_PATH.read_text()).substitute(
-            pool_name=name, pool_id=pool_id, api_url=api_url, secret_name=secret_name
+            pool_name=_python_literal(name),
+            pool_id=_python_literal(pool_id),
+            api_url=_python_literal(api_url),
+            secret_name=_python_literal(secret_name),
         )
         out_path.write_text(generated)
     except OSError as e:
         if created_pool_id and _delete_pool(api_url, token, created_pool_id):
-            raise SystemExit(f"Failed to write {out_path}, rolled back pool {created_pool_id}: {e}")
+            raise SystemExit(
+                f"Failed to write {out_path}, rolled back pool {created_pool_id}: {e}"
+            ) from e
         elif created_pool_id:
             raise SystemExit(
                 f"Failed to write {out_path}: {e}\n"
                 f"Also failed to roll back pool {name} ({created_pool_id}) -- "
                 f"delete it from the Devin dashboard or with the Outposts API."
-            )
-        raise SystemExit(f"Failed to write {out_path}: {e}")
+            ) from e
+        raise SystemExit(f"Failed to write {out_path}: {e}") from e
     _done(f"Wrote [cyan]{out_path}[/cyan]")
 
     existing_secrets = _existing_secret_names()
@@ -257,7 +286,9 @@ def create(
             _console.print(f"[dim]Grab a Devin Service User Key: {DEVIN_TOKEN_URL}[/dim]")
             token = _ask(
                 "Devin Service User Key [dim](leave blank to skip)[/dim]",
-                password=True, default="", show_default=False,
+                password=True,
+                default="",
+                show_default=False,
             )
         if token and _confirm(f"Create Modal secret {secret_name} now?", default=True):
             _step_start(f"Creating Modal secret {secret_name}...")
@@ -271,7 +302,8 @@ def create(
 
     if not secret_created and secret_name not in (existing_secrets or set()):
         _console.print(
-            f"[dim]next:[/dim] modal secret create {secret_name} DEVIN_OUTPOSTS_TOKEN=[dim]<token>[/dim]"
+            f"[dim]next:[/dim] modal secret create {secret_name} "
+            "DEVIN_OUTPOSTS_TOKEN=[dim]<token>[/dim]"
         )
 
     if interactive and _confirm(f"Deploy {name} now?", default=True):
