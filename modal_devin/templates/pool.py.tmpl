@@ -1,6 +1,8 @@
 """Modal entrypoint for a Devin Outposts pool."""
 
 import modal
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from modal_devin import outpost
 
@@ -8,9 +10,20 @@ POOL_NAME = $pool_name
 POOL_ID = $pool_id
 API_URL = $api_url
 
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="WORKER_", extra="ignore")
+
+    poll_interval_secs: int = Field(default=outpost.POLL_INTERVAL_SECS, gt=0)
+    session_timeout_secs: int = Field(default=outpost.SESSION_TIMEOUT_SECS, gt=0)
+
+
+settings = Settings()
+
+
 # install_ffmpeg/install_chrome default to on (screen recording / browser tools "just work");
 # pass False for either to skip it and get a leaner, faster-to-build image.
-image = outpost.worker_image()
+image = outpost.worker_image().pip_install("pydantic-settings>=2.0")
 # Devin requires every session repo checked out as a direct subdirectory of the workdir
 # `devin worker start` runs from (outpost.run_session runs it from /root/workspace) -- clone
 # each repo straight into /root/workspace/<repo>, not into a nested path:
@@ -31,16 +44,21 @@ app = modal.App(f"outpost-pool-{POOL_NAME}")
 secret = modal.Secret.from_name($secret_name)
 
 
-@app.function(image=image, secrets=[secret], timeout=outpost.SESSION_TIMEOUT_SECS + 60)
+@app.function(image=image, secrets=[secret], timeout=settings.session_timeout_secs + 60)
 def run_session(session_id: str, *, sidecar_image_id: str) -> None:
     outpost.run_session(
         app, image, session_id,
         pool_name=POOL_NAME, pool_id=POOL_ID, api_url=API_URL,
         sidecar_image_id=sidecar_image_id,
+        session_timeout_secs=settings.session_timeout_secs,
     )
 
 
-@app.function(image=image, secrets=[secret], schedule=modal.Period(seconds=outpost.POLL_INTERVAL_SECS))
+@app.function(
+    image=image,
+    secrets=[secret],
+    schedule=modal.Period(seconds=settings.poll_interval_secs),
+)
 def poll_and_dispatch() -> None:
     outpost.poll_and_dispatch(
         pool_name=POOL_NAME, pool_id=POOL_ID, api_url=API_URL,

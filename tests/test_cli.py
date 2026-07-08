@@ -46,6 +46,29 @@ def test_generated_pool_import_does_not_build_the_sidecar(tmp_path, monkeypatch)
     runpy.run_path(str(tmp_path / "demo_pool.py"))
 
 
+def test_generated_pool_reads_worker_settings_from_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_interactive", lambda: False)
+    monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECS", "17")
+    monkeypatch.setenv("WORKER_SESSION_TIMEOUT_SECS", "900")
+
+    cli.create(
+        name="demo-pool",
+        pool_id="outpost_env-demo",
+        pools_dir=str(tmp_path),
+    )
+
+    generated = tmp_path / "demo_pool.py"
+    source = generated.read_text()
+    namespace = runpy.run_path(str(generated))
+
+    assert "schedule=modal.Period(seconds=settings.poll_interval_secs)" in source
+    assert "session_timeout_secs=settings.session_timeout_secs" in source
+    settings = namespace["settings"]
+    assert settings.poll_interval_secs == 17
+    assert settings.session_timeout_secs == 900
+
+
 def test_create_help_uses_explicit_parameter_descriptions(capsys):
     with pytest.raises(SystemExit) as exc_info:
         cli.app(["outpost", "create", "--help"])
