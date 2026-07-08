@@ -14,8 +14,10 @@ import sys
 import urllib.error
 import urllib.request
 from collections import deque
+from collections.abc import Sequence
 from pathlib import Path
 from string import Template
+from typing import Annotated, TextIO, TypedDict, Unpack, cast
 
 import cyclopts
 from modal.config import config as _modal_config
@@ -37,6 +39,41 @@ _PROMPT_SUFFIX = Text(" › ", style="dim")
 _console = Console()
 
 
+class _PromptKwargs(TypedDict, total=False):
+    console: Console
+    password: bool
+    choices: list[str]
+    case_sensitive: bool
+    show_default: bool
+    show_choices: bool
+    default: object
+    stream: TextIO
+
+
+PoolNameArg = Annotated[
+    str,
+    cyclopts.Parameter(help="Human-readable Devin worker pool name."),
+]
+PoolIdOption = Annotated[
+    str,
+    cyclopts.Parameter(
+        help="Existing Devin Outposts pool id. Omit to create a pool with the Devin CLI."
+    ),
+]
+ApiUrlOption = Annotated[
+    str,
+    cyclopts.Parameter(help="Base URL for the Devin API."),
+]
+SecretNameOption = Annotated[
+    str,
+    cyclopts.Parameter(help="Modal Secret name containing DEVIN_OUTPOSTS_TOKEN."),
+]
+PoolsDirOption = Annotated[
+    str,
+    cyclopts.Parameter(help="Directory where the generated Modal pool file is written."),
+]
+
+
 class _WizardPrompt(Prompt):
     prompt_suffix = _PROMPT_SUFFIX
 
@@ -56,9 +93,10 @@ def _mark_answered(question: str, shown_value: str) -> None:
     _console.print(f"[bold green]✔[/bold green] [bold]{question}[/bold] [dim]›[/dim] {shown_value}")
 
 
-def _ask(question: str, **kwargs) -> str:
-    answer = _WizardPrompt.ask(
-        f"[bold green]?[/bold green] [bold]{question}[/bold]", **kwargs
+def _ask(question: str, **kwargs: Unpack[_PromptKwargs]) -> str:
+    answer = cast(
+        str,
+        _WizardPrompt.ask(f"[bold green]?[/bold green] [bold]{question}[/bold]", **kwargs),
     ).strip()
     if kwargs.get("password"):
         # Fixed-width mask, not "*" * len(answer): a real token is long enough that echoing its
@@ -70,8 +108,10 @@ def _ask(question: str, **kwargs) -> str:
     return answer
 
 
-def _confirm(question: str, **kwargs) -> bool:
-    answer = _WizardConfirm.ask(f"[bold green]?[/bold green] [bold]{question}[/bold]", **kwargs)
+def _confirm(question: str, **kwargs: Unpack[_PromptKwargs]) -> bool:
+    answer = bool(
+        _WizardConfirm.ask(f"[bold green]?[/bold green] [bold]{question}[/bold]", **kwargs)
+    )
     _mark_answered(question, "yes" if answer else "no")
     return answer
 
@@ -102,7 +142,7 @@ def _interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def _modal(*args: str) -> subprocess.CompletedProcess:
+def _modal(*args: str) -> subprocess.CompletedProcess[str]:
     """Run `modal` via the current interpreter rather than a bare `modal` on PATH: `modal` is
     already a declared dependency of this package, so `-m modal` works inside modal-devin's own
     environment (repo .venv or the isolated `uv tool install` venv) even when the `modal` console
@@ -110,7 +150,7 @@ def _modal(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, "-m", "modal", *args], capture_output=True, text=True)
 
 
-def _run_with_tail(argv: list[str], window: int = 10) -> int:
+def _run_with_tail(argv: Sequence[str], window: int = 10) -> int:
     """Run a subprocess, showing only the last `window` lines of its output at a time -- enough
     to see it's alive and what it's doing, without flooding the terminal with a full build log.
     The final `window` lines stick around afterward (e.g. modal deploy's own success/URL line)."""
@@ -141,9 +181,18 @@ def _existing_secret_names() -> set[str] | None:
     if result.returncode != 0:
         return None
     try:
-        return {s["name"] for s in json.loads(result.stdout)}
+        payload: object = json.loads(result.stdout)
     except json.JSONDecodeError:
         return None
+    if not isinstance(payload, list):
+        return None
+    names: set[str] = set()
+    for item in payload:
+        if isinstance(item, dict):
+            name = item.get("name")
+            if isinstance(name, str):
+                names.add(name)
+    return names
 
 
 def _delete_pool(api_url: str, token: str | None, pool_id: str) -> bool:
@@ -153,7 +202,7 @@ def _delete_pool(api_url: str, token: str | None, pool_id: str) -> bool:
     callers should print manual cleanup instructions on False."""
     if not token:
         return False
-    req = urllib.request.Request(f"{api_url}/outposts/pools/{pool_id}", method="DELETE")
+    req = urllib.request.Request(f"{api_url.rstrip('/')}/outposts/pools/{pool_id}", method="DELETE")
     req.add_header("Authorization", f"Bearer {token}")
     try:
         with urllib.request.urlopen(req):
@@ -182,25 +231,14 @@ def _python_literal(value: str) -> str:
 
 @outpost.command
 def create(
-    name: str = "",
+    name: PoolNameArg = "",
     *,
-    pool_id: str = "",
-    api_url: str = "https://api.beta.devinenterprise.com",
-    secret_name: str = "devin-outposts-token",
-    pools_dir: str = "pools",
-):
-    """Scaffold a new pool file under pools/<name>.py.
-
-    Parameters
-    ----------
-    name: the pool's name (matches what `devin worker pool create` used, or
-        will be created with -- see --pool-id). Prompted for if omitted.
-    pool_id: the outpost_env-... id for an already-registered pool. If
-        omitted, this runs `devin worker pool create <name>` for you.
-    api_url: Devin API base URL (beta vs prod).
-    secret_name: name of the Modal Secret holding DEVIN_OUTPOSTS_TOKEN.
-        Create it with: modal secret create <secret_name> DEVIN_OUTPOSTS_TOKEN=...
-    """
+    pool_id: PoolIdOption = "",
+    api_url: ApiUrlOption = "https://api.beta.devinenterprise.com",
+    secret_name: SecretNameOption = "devin-outposts-token",
+    pools_dir: PoolsDirOption = "pools",
+) -> None:
+    """Scaffold a Modal pool file for Devin Outposts."""
     interactive = _interactive()
 
     if interactive and not _modal_is_configured() and _confirm("Set up Modal now?", default=True):
@@ -317,7 +355,7 @@ def create(
         _console.print(f"[dim]then:[/dim] modal deploy [cyan]{out_path}[/cyan]")
 
 
-def run():
+def run() -> None:
     app()
 
 

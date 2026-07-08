@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import runpy
 
+import pytest
+
 from modal_devin import cli, outpost
 
 
@@ -42,3 +44,14 @@ def test_generated_pool_import_does_not_build_the_sidecar(tmp_path, monkeypatch)
     )
 
     runpy.run_path(str(tmp_path / "demo_pool.py"))
+
+
+def test_create_help_uses_explicit_parameter_descriptions(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        cli.app(["outpost", "create", "--help"])
+
+    assert exc_info.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "Scaffold a Modal pool file for Devin Outposts." in help_text
+    assert "Human-readable Devin worker pool name." in help_text
+    assert "Scaffold a new pool file under pools/.py" not in help_text
