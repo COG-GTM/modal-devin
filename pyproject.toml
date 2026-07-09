@@ -3,7 +3,7 @@ name = "modal-devin"
 version = "0.1.0"
 description = "Run Devin Outposts workers on Modal"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -16,7 +16,9 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Typing :: Typed",
 ]
 dependencies = [
@@ -29,6 +31,7 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/aaazzam/modal-devin"
 Issues = "https://github.com/aaazzam/modal-devin/issues"
+Changelog = "https://github.com/aaazzam/modal-devin/blob/main/CHANGELOG.md"
 
 [project.scripts]
 modal-devin = "modal_devin.cli:run"
@@ -52,7 +55,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["ANN", "B", "E", "F", "I", "UP"]
