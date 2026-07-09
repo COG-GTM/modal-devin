@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from collections import deque
@@ -25,6 +26,8 @@ from rich.console import Console
 from rich.live import Live
 from rich.prompt import Confirm, Prompt
 from rich.text import Text
+
+from modal_devin import DEFAULT_API_URL
 
 app = cyclopts.App(name="modal-devin")
 outpost = cyclopts.App(name="outpost", help="Manage Outposts pools running on Modal.")
@@ -52,13 +55,18 @@ class _PromptKwargs(TypedDict, total=False):
 
 PoolNameArg = Annotated[
     str,
-    cyclopts.Parameter(help="Human-readable Devin worker pool name."),
+    cyclopts.Parameter(help="Human-readable Devin worker pool name.", show_default=False),
 ]
 PoolIdOption = Annotated[
     str,
     cyclopts.Parameter(
-        help="Existing Devin Outposts pool id. Omit to create a pool with the Devin CLI."
+        help="Existing Devin Outposts pool id. Omit to create a pool with the Devin CLI.",
+        show_default=False,
     ),
+]
+PoolFileArg = Annotated[
+    Path,
+    cyclopts.Parameter(help="Generated Modal pool file to deploy."),
 ]
 ApiUrlOption = Annotated[
     str,
@@ -72,6 +80,10 @@ PoolsDirOption = Annotated[
     str,
     cyclopts.Parameter(help="Directory where the generated Modal pool file is written."),
 ]
+DeployOption = Annotated[
+    bool | None,
+    cyclopts.Parameter(help="Deploy the generated pool file after writing it.", show_default=False),
+]
 
 
 class _WizardPrompt(Prompt):
@@ -83,6 +95,8 @@ class _WizardConfirm(Confirm):
 
 
 def _erase_last_line() -> None:
+    if not _interactive():
+        return
     _console.file.write("\x1b[1A\x1b[2K")
 
 
@@ -119,16 +133,21 @@ def _confirm(question: str, **kwargs: Unpack[_PromptKwargs]) -> bool:
 def _step_start(running: str) -> None:
     """Print a dim in-progress line; pair with _step_done/_step_failed to redraw it as a
     checkmark or cross once the step resolves -- create-next-app style."""
-    _console.print(f"[dim]{running}[/dim]")
+    if _interactive():
+        _console.print(f"[dim]{running}[/dim]")
+    else:
+        _console.print(running)
 
 
 def _step_done(text: str) -> None:
-    _erase_last_line()
+    if _interactive():
+        _erase_last_line()
     _console.print(f"[bold green]✔[/bold green] {text}")
 
 
 def _step_failed(text: str) -> None:
-    _erase_last_line()
+    if _interactive():
+        _erase_last_line()
     _console.print(f"[bold red]✖[/bold red] {text}")
 
 
@@ -174,6 +193,13 @@ def _run_with_tail(argv: Sequence[str], window: int = 10) -> int:
     return proc.returncode
 
 
+def _modal_deploy(pool_file: Path) -> int:
+    argv = [sys.executable, "-m", "modal", "deploy", str(pool_file)]
+    if _interactive():
+        return _run_with_tail(argv)
+    return subprocess.run(argv).returncode
+
+
 def _existing_secret_names() -> set[str] | None:
     """Names of secrets already in the workspace, or None if the check itself failed (not
     logged in, ...) -- callers should fall back to manual instructions."""
@@ -193,6 +219,27 @@ def _existing_secret_names() -> set[str] | None:
             if isinstance(name, str):
                 names.add(name)
     return names
+
+
+def _create_modal_secret(secret_name: str, token: str) -> subprocess.CompletedProcess[str]:
+    """Create a Modal secret without placing the token in the subprocess argv."""
+    tmp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            prefix="modal-devin-secret-",
+            suffix=".json",
+            delete=False,
+        ) as secret_file:
+            tmp_path = secret_file.name
+            os.chmod(tmp_path, 0o600)
+            json.dump({"DEVIN_OUTPOSTS_TOKEN": token}, secret_file)
+            secret_file.write("\n")
+        return _modal("secret", "create", "--from-json", tmp_path, secret_name)
+    finally:
+        if tmp_path is not None:
+            Path(tmp_path).unlink(missing_ok=True)
 
 
 def _delete_pool(api_url: str, token: str | None, pool_id: str) -> bool:
@@ -230,13 +277,22 @@ def _python_literal(value: str) -> str:
 
 
 @outpost.command
+def deploy(pool_file: PoolFileArg) -> None:
+    """Deploy a generated Modal pool file using modal-devin's Python environment."""
+    returncode = _modal_deploy(pool_file)
+    if returncode != 0:
+        raise SystemExit(returncode)
+
+
+@outpost.command
 def create(
     name: PoolNameArg = "",
     *,
     pool_id: PoolIdOption = "",
-    api_url: ApiUrlOption = "https://api.beta.devinenterprise.com",
+    api_url: ApiUrlOption = DEFAULT_API_URL,
     secret_name: SecretNameOption = "devin-outposts-token",
     pools_dir: PoolsDirOption = "pools",
+    deploy: DeployOption = None,
 ) -> None:
     """Scaffold a Modal pool file for Devin Outposts."""
     interactive = _interactive()
@@ -330,7 +386,7 @@ def create(
             )
         if token and _confirm(f"Create Modal secret {secret_name} now?", default=True):
             _step_start(f"Creating Modal secret {secret_name}...")
-            result = _modal("secret", "create", secret_name, f"DEVIN_OUTPOSTS_TOKEN={token}")
+            result = _create_modal_secret(secret_name, token)
             if result.returncode != 0:
                 _step_failed(f"Modal secret {secret_name} creation failed")
                 _console.print(result.stderr)
@@ -340,19 +396,24 @@ def create(
 
     if not secret_created and secret_name not in (existing_secrets or set()):
         _console.print(
-            f"[dim]next:[/dim] modal secret create {secret_name} "
-            "DEVIN_OUTPOSTS_TOKEN=[dim]<token>[/dim]"
+            f"[dim]next:[/dim] modal secret create --from-json "
+            f"[cyan]/path/to/secret.json[/cyan] {secret_name}"
         )
 
-    if interactive and _confirm(f"Deploy {name} now?", default=True):
+    should_deploy = deploy if deploy is not None else interactive and _confirm(
+        f"Deploy {name} now?",
+        default=True,
+    )
+    if should_deploy:
         _console.print(f"[dim]Running modal deploy {out_path}...[/dim]")
-        returncode = _run_with_tail([sys.executable, "-m", "modal", "deploy", str(out_path)])
+        returncode = _modal_deploy(out_path)
         if returncode == 0:
             _done(f"Deployed [bold]{name}[/bold]")
         else:
             _console.print(f"[bold red]✖[/bold red] modal deploy failed (exit code {returncode})")
+            raise SystemExit(returncode)
     else:
-        _console.print(f"[dim]then:[/dim] modal deploy [cyan]{out_path}[/cyan]")
+        _console.print(f"[dim]then:[/dim] modal-devin outpost deploy [cyan]{out_path}[/cyan]")
 
 
 def run() -> None:

@@ -21,16 +21,23 @@ uv run modal-devin --help
 
 ## Prerequisites
 
-- Python 3.12 or newer.
+- Python 3.11 or newer.
 - A configured Modal account: `uv run python -m modal setup`.
 - A Devin service user key with Outposts access.
 - The Devin CLI on your local machine if you want `modal-devin` to create the
   Devin pool for you.
 
-Create the Modal secret used by generated pools:
+Create the Modal secret used by generated pools without placing the token in
+your shell history or process argv:
 
 ```bash
-modal secret create devin-outposts-token DEVIN_OUTPOSTS_TOKEN=<token>
+read -rsp "Devin Outposts token: " DEVIN_OUTPOSTS_TOKEN
+printf "\n"
+tmp_secret_file="$(mktemp)"
+chmod 600 "$tmp_secret_file"
+printf 'DEVIN_OUTPOSTS_TOKEN=%s\n' "$DEVIN_OUTPOSTS_TOKEN" > "$tmp_secret_file"
+modal secret create --from-dotenv "$tmp_secret_file" devin-outposts-token
+rm -f "$tmp_secret_file"
 ```
 
 ## Quick Start
@@ -39,13 +46,20 @@ Use an existing Devin Outposts pool id:
 
 ```bash
 modal-devin outpost create my-pool --pool-id outpost_env-...
-modal deploy pools/my_pool.py
+modal-devin outpost deploy pools/my_pool.py
 ```
 
 Or run the command interactively and let it prompt for missing values:
 
 ```bash
 modal-devin outpost create
+```
+
+For scripted setup, pass `--deploy` to create the file and deploy it with the
+same Python environment that provides `modal-devin`:
+
+```bash
+modal-devin outpost create my-pool --pool-id outpost_env-... --deploy
 ```
 
 The generated `pools/<name>.py` deploys two Modal functions:
@@ -58,10 +72,10 @@ The generated `pools/<name>.py` deploys two Modal functions:
   snapshots suspended sessions, and releases failed claims.
 
 The generated pool reads worker settings with `pydantic-settings` at deploy
-time. Defaults are sensible, but you can override them before `modal deploy`:
+time. Defaults are sensible, but you can override them before deploy:
 
 ```bash
-WORKER_POLL_INTERVAL_SECS=30 WORKER_SESSION_TIMEOUT_SECS=1800 modal deploy pools/my_pool.py
+WORKER_POLL_INTERVAL_SECS=30 WORKER_SESSION_TIMEOUT_SECS=1800 modal-devin outpost deploy pools/my_pool.py
 ```
 
 ## Custom Worker Images
@@ -91,6 +105,7 @@ image = outpost.clone_private_repo(
 
 The package ships `py.typed`. The intended public helpers are:
 
+- `OutpostPoolConfig(name: str, pool_id: str, api_url: str = DEFAULT_API_URL)`
 - `worker_image(...) -> modal.Image`
 - `clone_private_repo(...) -> modal.Image`
 - `build_sidecar_image_id(pool_name: str) -> str`
@@ -98,7 +113,12 @@ The package ships `py.typed`. The intended public helpers are:
 - `run_session(...) -> None`
 
 `poll_and_dispatch()` accepts any `SessionRunner` protocol implementation: an
-object with `spawn(session_id: str, *, sidecar_image_id: str)`.
+object with `spawn(session_id: str, *, sidecar_image_id: str)`. New code should
+pass `config=OutpostPoolConfig(...)`; the older `pool_name=...`, `pool_id=...`,
+and `api_url=...` keyword arguments remain supported for generated files.
+
+Runtime messages are emitted with the `modal_devin.outpost` logger. Generated
+pools default `WORKER_LOG_LEVEL` to `INFO`.
 
 ## Security
 

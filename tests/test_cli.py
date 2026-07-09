@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import runpy
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -67,6 +70,79 @@ def test_generated_pool_reads_worker_settings_from_env(tmp_path, monkeypatch):
     settings = namespace["settings"]
     assert settings.poll_interval_secs == 17
     assert settings.session_timeout_secs == 900
+    assert "POOL_CONFIG = outpost.OutpostPoolConfig" in source
+    assert "config=POOL_CONFIG" in source
+
+
+def test_create_modal_secret_uses_a_temp_json_file_not_argv(monkeypatch):
+    seen_paths: list[Path] = []
+
+    def fake_modal(*args: str):
+        assert args[0:3] == ("secret", "create", "--from-json")
+        assert args[-1] == "devin-outposts-token"
+        assert not any("super-secret-token" in arg for arg in args)
+
+        secret_path = Path(args[3])
+        seen_paths.append(secret_path)
+        assert secret_path.exists()
+        assert json.loads(secret_path.read_text()) == {
+            "DEVIN_OUTPOSTS_TOKEN": "super-secret-token"
+        }
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(cli, "_modal", fake_modal)
+
+    result = cli._create_modal_secret("devin-outposts-token", "super-secret-token")
+
+    assert result.returncode == 0
+    assert seen_paths
+    assert not seen_paths[0].exists()
+
+
+def test_create_can_deploy_with_modal_devins_python_environment(tmp_path, monkeypatch):
+    deployed: list[Path] = []
+
+    monkeypatch.setattr(cli, "_interactive", lambda: False)
+    monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
+    monkeypatch.setattr(cli, "_modal_deploy", lambda path: deployed.append(path) or 0)
+
+    cli.create(
+        name="demo-pool",
+        pool_id="outpost_env-demo",
+        pools_dir=str(tmp_path),
+        deploy=True,
+    )
+
+    assert deployed == [tmp_path / "demo_pool.py"]
+
+
+def test_create_no_deploy_skips_the_interactive_deploy_prompt(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_interactive", lambda: True)
+    monkeypatch.setattr(cli, "_modal_is_configured", lambda: True)
+    monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
+    monkeypatch.setattr(
+        cli,
+        "_confirm",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected prompt")),
+    )
+
+    cli.create(
+        name="demo-pool",
+        pool_id="outpost_env-demo",
+        pools_dir=str(tmp_path),
+        deploy=False,
+    )
+
+    assert (tmp_path / "demo_pool.py").exists()
+
+
+def test_outpost_deploy_wraps_modal_deploy(monkeypatch):
+    deployed: list[Path] = []
+    monkeypatch.setattr(cli, "_modal_deploy", lambda path: deployed.append(path) or 0)
+
+    cli.deploy(Path("pools/demo.py"))
+
+    assert deployed == [Path("pools/demo.py")]
 
 
 def test_create_help_uses_explicit_parameter_descriptions(capsys):
@@ -78,3 +154,4 @@ def test_create_help_uses_explicit_parameter_descriptions(capsys):
     assert "Scaffold a Modal pool file for Devin Outposts." in help_text
     assert "Human-readable Devin worker pool name." in help_text
     assert "Scaffold a new pool file under pools/.py" not in help_text
+    assert '[default: ""]' not in help_text
