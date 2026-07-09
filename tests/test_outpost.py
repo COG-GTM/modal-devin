@@ -112,6 +112,35 @@ def _pending(*session_ids):
 
 
 class TestPollAndDispatch:
+    def test_accepts_a_pool_config_object(self, monkeypatch):
+        api_calls = []
+
+        def fake_api_request(api_url, token, method, path, body=None):
+            api_calls.append((api_url, method, path, body))
+            return _pending("sess-1") if method == "GET" else {"status": {}}
+
+        monkeypatch.setattr(outpost, "_api_request", fake_api_request)
+        run_session_fn = Mock()
+
+        outpost.poll_and_dispatch(
+            config=outpost.OutpostPoolConfig(
+                name="mypool",
+                pool_id="outpost_env-abc",
+                api_url="https://api.example.com",
+            ),
+            run_session_fn=run_session_fn,
+            sidecar_image_id="im-sidecar",
+        )
+
+        assert api_calls[0] == (
+            "https://api.example.com",
+            "GET",
+            "/opbeta/outposts/devins?pool=outpost_env-abc&phase=pending",
+            None,
+        )
+        assert api_calls[1][3] == {"acceptor_id": "modal-mypool"}
+        run_session_fn.spawn.assert_called_once_with("sess-1", sidecar_image_id="im-sidecar")
+
     def test_dispatches_every_pending_session(self, monkeypatch):
         claimed_paths = []
 
@@ -554,6 +583,27 @@ class TestWorkerImage:
     def test_builds_regardless_of_optional_dependency_flags(self, install_ffmpeg, install_chrome):
         image = outpost.worker_image(install_ffmpeg=install_ffmpeg, install_chrome=install_chrome)
         assert isinstance(image, modal.Image)
+
+
+class TestOutpostPoolConfig:
+    def test_exposes_modal_names_derived_from_the_pool_name(self):
+        config = outpost.OutpostPoolConfig(name="demo", pool_id="outpost_env-demo")
+
+        assert config.acceptor_id == "modal-demo"
+        assert config.modal_app_name == "outpost-pool-demo"
+        assert config.api_url == outpost.DEFAULT_API_URL
+
+    @pytest.mark.parametrize(
+        ("field", "kwargs"),
+        [
+            ("name", {"name": "", "pool_id": "outpost_env-demo"}),
+            ("pool_id", {"name": "demo", "pool_id": ""}),
+            ("api_url", {"name": "demo", "pool_id": "outpost_env-demo", "api_url": ""}),
+        ],
+    )
+    def test_rejects_empty_required_values(self, field, kwargs):
+        with pytest.raises(ValueError, match=f"{field} must not be empty"):
+            outpost.OutpostPoolConfig(**kwargs)
 
 
 # ------------------------------------------------------------------------------------------------

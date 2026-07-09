@@ -13,20 +13,23 @@ bodies) and the pool file's `run_session`/`poll_and_dispatch` are thin wrappers 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
-import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Collection, Iterable, Mapping
-from typing import Protocol, cast
+from dataclasses import dataclass
+from typing import Protocol, TypeAlias, cast
 
 import modal
 
-type JsonValue = str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]
-type JsonObject = dict[str, JsonValue]
+JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+JsonObject: TypeAlias = dict[str, JsonValue]
+
+logger = logging.getLogger(__name__)
 
 DEVIN_CLI_INSTALL = "curl -fsSL https://cli.devin.ai/install.sh | bash || true"
 DEVIN_BIN = "/root/.local/bin/devin"
@@ -56,12 +59,41 @@ CADDY_INSTALL = (
 
 DUMMY_TOKEN = "cog_sidecarmanaged00000000000000000000000000000000"
 SIDECAR_PORT = 8686
+DEFAULT_API_URL = "https://api.beta.devinenterprise.com"
 POLL_INTERVAL_SECS = 30
 SESSION_TIMEOUT_SECS = 1800
 API_TIMEOUT_SECS = 30
 
 CHROME_PATH = "/usr/bin/chromium"
 _SHELL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+@dataclass(frozen=True, slots=True)
+class OutpostPoolConfig:
+    """Configuration for one Devin Outposts pool running on Modal."""
+
+    name: str
+    pool_id: str
+    api_url: str = DEFAULT_API_URL
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("name", self.name),
+            ("pool_id", self.pool_id),
+            ("api_url", self.api_url),
+        ):
+            if not value.strip():
+                raise ValueError(f"{field_name} must not be empty")
+
+    @property
+    def acceptor_id(self) -> str:
+        """Acceptor id used when claiming and releasing Devin sessions."""
+        return f"modal-{self.name}"
+
+    @property
+    def modal_app_name(self) -> str:
+        """Default Modal app name for generated pool entrypoints."""
+        return f"outpost-pool-{self.name}"
 
 
 class SessionRunner(Protocol):
@@ -207,6 +239,32 @@ def build_sidecar_image_id(pool_name: str) -> str:
     return image_id
 
 
+def _pool_config_from_args(
+    config: OutpostPoolConfig | None,
+    *,
+    pool_name: str | None,
+    pool_id: str | None,
+    api_url: str | None,
+) -> OutpostPoolConfig:
+    if config is not None:
+        if pool_name is not None or pool_id is not None or api_url is not None:
+            raise TypeError("pass either config or pool_name/pool_id/api_url, not both")
+        return config
+
+    missing = [
+        name
+        for name, value in (("pool_name", pool_name), ("pool_id", pool_id))
+        if value is None
+    ]
+    if missing:
+        raise TypeError("missing required pool configuration: " + ", ".join(missing))
+    return OutpostPoolConfig(
+        name=cast(str, pool_name),
+        pool_id=cast(str, pool_id),
+        api_url=api_url or DEFAULT_API_URL,
+    )
+
+
 def _json_object_from_response(body: bytes, *, url: str) -> JsonObject:
     if not body:
         return {}
@@ -263,9 +321,9 @@ def _release_safely(
     try:
         _release(api_url, token, session_id, acceptor_id)
     except (urllib.error.URLError, ValueError) as e:
-        print(f"[{session_id}] failed to release claim after {reason}: {e}", file=sys.stderr)
+        logger.warning("[%s] failed to release claim after %s: %s", session_id, reason, e)
     else:
-        print(f"[{session_id}] released claim after {reason}")
+        logger.info("[%s] released claim after %s", session_id, reason)
 
 
 def _response_items(response: Mapping[str, JsonValue]) -> Iterable[Mapping[str, JsonValue]]:
@@ -342,7 +400,7 @@ def _create_sandbox(
             workdir=workdir,
             timeout=timeout,
         )
-        print(f"resuming from snapshot {resume_name!r}")
+        logger.info("resuming from snapshot %r", resume_name)
         return sb
     except modal.exception.NotFoundError:
         pass  # no snapshot for this session yet -- the common case, nothing to log
@@ -377,9 +435,10 @@ def run_session(
     image: modal.Image,
     session_id: str,
     *,
-    pool_name: str,
-    pool_id: str,
-    api_url: str,
+    config: OutpostPoolConfig | None = None,
+    pool_name: str | None = None,
+    pool_id: str | None = None,
+    api_url: str | None = None,
     sidecar_image_id: str,
     session_timeout_secs: int = SESSION_TIMEOUT_SECS,
 ) -> None:
@@ -396,14 +455,19 @@ def run_session(
     exits... if your pool is resumable, snapshot the machine before terminating so you can restore
     it if the session resumes."
     """
-    acceptor_id = f"modal-{pool_name}"
+    pool_config = _pool_config_from_args(
+        config,
+        pool_name=pool_name,
+        pool_id=pool_id,
+        api_url=api_url,
+    )
     token = os.environ["DEVIN_OUTPOSTS_TOKEN"]
-    snapshot_name = _snapshot_name(pool_name, session_id)
+    snapshot_name = _snapshot_name(pool_config.name, session_id)
 
     sb: modal.Sandbox | None = None
     try:
         sb = _create_sandbox(app, image, snapshot_name, "/root/workspace", session_timeout_secs)
-        _create_caddy_sidecar(sb, sidecar_image_id, api_url, token)
+        _create_caddy_sidecar(sb, sidecar_image_id, pool_config.api_url, token)
 
         wait_proc = sb.exec(
             "sh",
@@ -428,29 +492,35 @@ def run_session(
             "--session",
             session_id,
             "--pool",
-            pool_id,
+            pool_config.pool_id,
             "--acceptor-id",
-            acceptor_id,
+            pool_config.acceptor_id,
             env=worker_env,
         )
         for line in worker_proc.stdout:
-            print(f"[{session_id}] {line}", end="")
+            logger.info("[%s] %s", session_id, line.rstrip())
         returncode = worker_proc.wait()
-        print(f"[{session_id}] devin worker exited: {returncode}")
+        logger.info("[%s] devin worker exited: %s", session_id, returncode)
 
-        status = _session_status(api_url, token, session_id, acceptor_id)
+        status = _session_status(pool_config.api_url, token, session_id, pool_config.acceptor_id)
         if status == "suspended":
-            print(f"[{session_id}] session suspended, snapshotting filesystem for resume")
+            logger.info("[%s] session suspended, snapshotting filesystem for resume", session_id)
             sb.snapshot_filesystem().publish(snapshot_name)
         # else: no explicit cleanup for a stale snapshot from an earlier suspend -- there's no
         # unpublish API, so a since-terminated session's old snapshot just ages out via the
         # underlying Image's own ttl (see snapshot_filesystem's ttl param, default 30 days).
 
         if returncode != 0:
-            _release_safely(api_url, token, session_id, acceptor_id, "nonzero exit")
+            _release_safely(
+                pool_config.api_url,
+                token,
+                session_id,
+                pool_config.acceptor_id,
+                "nonzero exit",
+            )
     except Exception as e:
-        print(f"[{session_id}] run_session failed: {e}", file=sys.stderr)
-        _release_safely(api_url, token, session_id, acceptor_id, "failure")
+        logger.exception("[%s] run_session failed: %s", session_id, e)
+        _release_safely(pool_config.api_url, token, session_id, pool_config.acceptor_id, "failure")
         raise
     finally:
         if sb is not None:
@@ -459,9 +529,10 @@ def run_session(
 
 def poll_and_dispatch(
     *,
-    pool_name: str,
-    pool_id: str,
-    api_url: str,
+    config: OutpostPoolConfig | None = None,
+    pool_name: str | None = None,
+    pool_id: str | None = None,
+    api_url: str | None = None,
     run_session_fn: SessionRunner,
     sidecar_image_id: str | None = None,
 ) -> None:
@@ -469,8 +540,13 @@ def poll_and_dispatch(
 
     Call this from the pool file's `poll_and_dispatch`, passing its own `run_session` Function.
     """
-    acceptor_id = f"modal-{pool_name}"
-    poll_api_url = os.environ.get("DEVIN_API_URL", api_url)
+    pool_config = _pool_config_from_args(
+        config,
+        pool_name=pool_name,
+        pool_id=pool_id,
+        api_url=api_url,
+    )
+    poll_api_url = os.environ.get("DEVIN_API_URL", pool_config.api_url)
     token = os.environ["DEVIN_OUTPOSTS_TOKEN"]
 
     try:
@@ -478,10 +554,13 @@ def poll_and_dispatch(
             poll_api_url,
             token,
             "GET",
-            _query_path("/opbeta/outposts/devins", {"pool": pool_id, "phase": "pending"}),
+            _query_path(
+                "/opbeta/outposts/devins",
+                {"pool": pool_config.pool_id, "phase": "pending"},
+            ),
         )
     except (urllib.error.URLError, ValueError) as e:
-        print(f"poll failed: {e}", file=sys.stderr)
+        logger.warning("poll failed: %s", e)
         return
 
     pending_items = tuple(_response_items(pending))
@@ -490,15 +569,15 @@ def poll_and_dispatch(
 
     if sidecar_image_id is None:
         try:
-            sidecar_image_id = build_sidecar_image_id(pool_name)
+            sidecar_image_id = build_sidecar_image_id(pool_config.name)
         except Exception as e:
-            print(f"sidecar image build failed before claiming sessions: {e}", file=sys.stderr)
+            logger.exception("sidecar image build failed before claiming sessions: %s", e)
             return
 
     for item in pending_items:
         session_id = _session_id_from_item(item)
         if session_id is None:
-            print(f"pending item without metadata.session_id: {item}", file=sys.stderr)
+            logger.warning("pending item without metadata.session_id: %s", item)
             continue
         try:
             claim = _api_request(
@@ -506,21 +585,27 @@ def poll_and_dispatch(
                 token,
                 "POST",
                 _devin_path(session_id, "claim"),
-                {"acceptor_id": acceptor_id},
+                {"acceptor_id": pool_config.acceptor_id},
             )
         except urllib.error.HTTPError as e:
             if e.code == 409:
                 continue
-            print(f"[{session_id}] claim failed: {e}", file=sys.stderr)
+            logger.warning("[%s] claim failed: %s", session_id, e)
             continue
         except (urllib.error.URLError, ValueError) as e:
-            print(f"[{session_id}] claim failed: {e}", file=sys.stderr)
+            logger.warning("[%s] claim failed: %s", session_id, e)
             continue
 
         deadline = _claim_deadline_from_response(claim)
-        print(f"[{session_id}] claimed, claim_deadline={deadline}, dispatching")
+        logger.info("[%s] claimed, claim_deadline=%s, dispatching", session_id, deadline)
         try:
             run_session_fn.spawn(session_id, sidecar_image_id=sidecar_image_id)
         except Exception as e:
-            print(f"[{session_id}] dispatch failed: {e}", file=sys.stderr)
-            _release_safely(poll_api_url, token, session_id, acceptor_id, "dispatch failure")
+            logger.exception("[%s] dispatch failed: %s", session_id, e)
+            _release_safely(
+                poll_api_url,
+                token,
+                session_id,
+                pool_config.acceptor_id,
+                "dispatch failure",
+            )
