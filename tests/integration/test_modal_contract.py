@@ -15,6 +15,7 @@ app = modal.App("modal-devin-integration")
 secret = modal.Secret.from_dict({"DEVIN_OUTPOSTS_TOKEN": "integration-placeholder"})
 base_image = modal.Image.debian_slim().run_commands("mkdir -p /root/workspace")
 image = worker.prepare_image(base_image)
+controller_image = worker.controller_image()
 
 
 @app.function(
@@ -29,7 +30,7 @@ def session(session_id: str) -> None:
 
 @app.function(
     name="scheduler",
-    image=image,
+    image=controller_image,
     secrets=[secret],
     schedule=modal.Period(seconds=worker.settings.scheduler_interval_seconds),
 )

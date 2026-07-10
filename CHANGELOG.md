@@ -21,6 +21,14 @@ and uses semantic versioning.
   decorators, schedule, and connection between the scheduler and session function.
 - Session and scheduler bodies are thin adapters into `Worker.run_session()` and
   `Worker.dispatch_pending_sessions()`.
+- Claims are acquired inside the spawned session invocation rather than before the
+  asynchronous Modal dispatch, so queue delays and function retries do not reuse a
+  stale claim.
+- Outposts session states are parsed into a closed protocol type; malformed or new
+  states preserve recovery data instead of being treated as completed.
+- Scheduler functions use a lightweight controller image instead of the full Devin
+  worker image.
+- Sidecar image cache entries are versioned by the sidecar recipe digest.
 - `Worker.run_session()` inherits Modal Sandbox keyword typing through `ParamSpec`
   while protecting runtime-owned lifecycle options.
 - Deployed functions are named `scheduler` and `session` by operational role.
@@ -29,6 +37,8 @@ and uses semantic versioning.
 - Final session status failures preserve a recovery snapshot and fail the Modal
   invocation.
 - Nonzero Devin worker exits now raise `WorkerExitedError`.
+- Outer function timeouts now account for status requests and backoff, sidecar
+  readiness, snapshot creation, claim release, and cleanup.
 - Package installation is documented as a project dependency rather than an
   isolated tool installation.
 
@@ -45,3 +55,5 @@ and uses semantic versioning.
   request to the upstream API.
 - The credential-injecting proxy only forwards Outposts API paths.
 - Worker output combines stdout and stderr so failures remain observable.
+- Private clone URLs with query strings are rejected so query-carried credentials
+  cannot enter build commands, logs, or Git remotes.

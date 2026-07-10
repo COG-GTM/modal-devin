@@ -10,6 +10,8 @@ import pytest
 from modal_devin import ModalCompatibilityError
 from modal_devin.images import (
     _CADDYFILE,
+    _SIDECAR_RECIPE_DIGEST,
+    _controller_image,
     _create_sidecar,
     _sidecar_image,
     _worker_image,
@@ -28,6 +30,20 @@ def test_worker_image_remains_composable():
 
     assert isinstance(customized, modal.Image)
     assert "local files" not in repr(image)
+
+
+def test_controller_image_is_small_and_contains_the_runtime_source():
+    image = _controller_image()
+
+    representation = repr(image)
+    assert "local files" in representation
+    assert "chromium" not in representation
+    assert "ffmpeg" not in representation
+
+
+def test_sidecar_recipe_has_a_stable_cache_digest():
+    assert len(_SIDECAR_RECIPE_DIGEST) == 12
+    assert _SIDECAR_RECIPE_DIGEST.isalnum()
 
 
 @pytest.mark.parametrize("install_chrome", [True, False])
@@ -54,6 +70,7 @@ def test_sidecar_health_check_does_not_proxy_to_devin():
         "http://github.com/org/repo",
         "file:///tmp/repo",
         "https://user:token@github.com/org/repo",
+        "https://github.com/org/repo?access_token=secret",
         "https://github.com/org/repo#main",
     ],
 )

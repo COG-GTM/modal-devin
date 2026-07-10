@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock
@@ -59,8 +60,8 @@ class Sandbox:
         self.exec_calls.append((args, kwargs))
         return Process(self.returncode)
 
-    def snapshot_filesystem(self, *, ttl):
-        self.snapshot_calls.append(ttl)
+    def snapshot_filesystem(self, *, timeout, ttl):
+        self.snapshot_calls.append((timeout, ttl))
         return SimpleNamespace(object_id="im-snapshot")
 
     def terminate(self):
@@ -70,10 +71,18 @@ class Sandbox:
 class Client:
     token = "real-token"
 
-    def __init__(self, *, status=None, status_errors=()):
+    def __init__(self, *, status=None, status_errors=(), claim_error=None):
         self.status = status
         self.status_errors = list(status_errors)
+        self.claim_error = claim_error
+        self.claims = []
         self.releases = []
+
+    def claim(self, session_id, acceptor_id):
+        self.claims.append((session_id, acceptor_id))
+        if self.claim_error:
+            raise self.claim_error
+        return Claim("tomorrow")
 
     def session_status(self, session_id, acceptor_id):
         if self.status_errors:
@@ -115,6 +124,21 @@ def run_claimed(monkeypatch, *, config, settings, client, store, sandbox):
     )
 
 
+def test_worker_logging_does_not_reconfigure_the_application_root_logger():
+    root_logger = logging.getLogger()
+    original_root_level = root_logger.level
+    original_worker_level = runtime.logger.level
+    configured = WorkerSettings(log_level="DEBUG")
+
+    try:
+        runtime._configure_logging(configured)
+
+        assert root_logger.level == original_root_level
+        assert runtime.logger.level == logging.DEBUG
+    finally:
+        runtime.logger.setLevel(original_worker_level)
+
+
 def test_suspended_session_is_snapshotted_by_id(monkeypatch, config, settings):
     store = Store()
     sandbox = Sandbox()
@@ -129,7 +153,7 @@ def test_suspended_session_is_snapshotted_by_id(monkeypatch, config, settings):
     )
 
     assert store.values["devin-1"] == "im-snapshot"
-    assert sandbox.snapshot_calls == [123]
+    assert sandbox.snapshot_calls == [(settings.snapshot_timeout_seconds, 123)]
     assert sandbox.terminated
     [(_args, kwargs)] = sandbox.exec_calls
     assert kwargs["stderr"].name == "STDOUT"
@@ -183,8 +207,13 @@ def test_status_transport_failure_preserves_snapshot_then_fails(monkeypatch, con
     assert sandbox.terminated
 
 
-@pytest.mark.parametrize("status", ["pending", "claimed", "running", "resuming"])
-def test_active_status_after_exit_is_preserved_for_recovery(monkeypatch, config, settings, status):
+@pytest.mark.parametrize(
+    "status",
+    ["new", "pending", "claimed", "running", "resuming", "future-state"],
+)
+def test_nonterminal_or_unknown_status_is_preserved_for_recovery(
+    monkeypatch, config, settings, status
+):
     store = Store()
 
     with pytest.raises(SessionStatusUnknownError):
@@ -198,6 +227,22 @@ def test_active_status_after_exit_is_preserved_for_recovery(monkeypatch, config,
         )
 
     assert store.values["devin-1"] == "im-snapshot"
+
+
+@pytest.mark.parametrize("status", ["exit", "error", "terminated"])
+def test_known_terminal_status_removes_old_snapshot(monkeypatch, config, settings, status):
+    store = Store({"devin-1": "im-old"})
+
+    run_claimed(
+        monkeypatch,
+        config=config,
+        settings=settings,
+        client=Client(status=status),
+        store=store,
+        sandbox=Sandbox(),
+    )
+
+    assert "devin-1" not in store.values
 
 
 def test_run_session_releases_claim_after_any_failure(monkeypatch, config, settings):
@@ -223,6 +268,55 @@ def test_run_session_releases_claim_after_any_failure(monkeypatch, config, setti
         )
 
     assert client.releases == [("devin-1", config.acceptor_id)]
+    assert client.claims == [("devin-1", config.acceptor_id)]
+
+
+def test_run_session_claim_conflict_is_a_successful_duplicate(monkeypatch, config, settings):
+    client = Client(claim_error=ClaimConflict("devin-1"))
+    run_claimed_session = Mock()
+    monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
+    monkeypatch.setattr(runtime, "_run_claimed_session", run_claimed_session)
+
+    runtime.execute_session(
+        app=Mock(),
+        image=Mock(),
+        config=config,
+        settings=settings,
+        session_id="devin-1",
+        token="token",
+        sandbox_options={},
+    )
+
+    assert client.claims == [("devin-1", config.acceptor_id)]
+    assert client.releases == []
+    run_claimed_session.assert_not_called()
+
+
+def test_modal_retry_reacquires_the_claim(monkeypatch, config, settings):
+    client = Client()
+    store = Store({runtime._SIDECAR_IMAGE_KEY: "im-sidecar"})
+    monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
+    monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
+    monkeypatch.setattr(
+        runtime,
+        "_run_claimed_session",
+        Mock(side_effect=RuntimeError("retryable failure")),
+    )
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="retryable failure"):
+            runtime.execute_session(
+                app=Mock(),
+                image=Mock(),
+                config=config,
+                settings=settings,
+                session_id="devin-1",
+                token="token",
+                sandbox_options={},
+            )
+
+    assert client.claims == [("devin-1", config.acceptor_id)] * 2
+    assert client.releases == [("devin-1", config.acceptor_id)] * 2
 
 
 def test_run_session_releases_claim_when_sidecar_preparation_is_missing(
@@ -292,7 +386,9 @@ def test_sidecar_readiness_failure_includes_diagnostics():
     sandbox.exec.return_value = process
 
     with pytest.raises(RuntimeError, match="connection refused"):
-        runtime._wait_for_sidecar(sandbox)
+        runtime._wait_for_sidecar(sandbox, timeout_seconds=17)
+
+    assert "seq 1 85" in sandbox.exec.call_args.args[2]
 
 
 def test_status_lookup_retries_transport_errors_then_recovers(settings):
@@ -395,7 +491,9 @@ def test_scheduler_caches_sidecar_and_dispatches_claim(monkeypatch, config, sett
     spawn.assert_called_once_with("devin-1")
 
 
-def test_scheduler_releases_claim_when_spawn_fails(monkeypatch, config, settings):
+def test_scheduler_does_not_release_an_unclaimed_session_when_spawn_fails(
+    monkeypatch, config, settings
+):
     client = PollClient()
     monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
     store = Store({runtime._SIDECAR_IMAGE_KEY: "im-sidecar"})
@@ -409,11 +507,12 @@ def test_scheduler_releases_claim_when_spawn_fails(monkeypatch, config, settings
         token="token",
     )
 
-    assert client.released == [("devin-1", config.acceptor_id)]
+    assert client.released == []
+    assert client.claimed == []
 
 
-def test_scheduler_treats_claim_conflict_as_normal_contention(monkeypatch, config, settings):
-    client = PollClient(claim_error=ClaimConflict("devin-1"))
+def test_scheduler_dispatches_without_acquiring_the_claim(monkeypatch, config, settings):
+    client = PollClient()
     monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
     store = Store({runtime._SIDECAR_IMAGE_KEY: "im-sidecar"})
     monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
@@ -426,7 +525,8 @@ def test_scheduler_treats_claim_conflict_as_normal_contention(monkeypatch, confi
         token="token",
     )
 
-    spawn.assert_not_called()
+    spawn.assert_called_once_with("devin-1")
+    assert client.claimed == []
 
 
 def test_scheduler_request_failure_is_deferred_to_the_next_tick(monkeypatch, config, settings):

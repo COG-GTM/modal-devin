@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import Callable, Mapping
 from typing import Any, Protocol
@@ -10,7 +11,7 @@ from typing import Any, Protocol
 import modal
 from modal.stream_type import StreamType
 
-from modal_devin._client import ClaimConflict, OutpostsClient
+from modal_devin._client import ClaimConflict, OutpostsClient, SessionStatus
 from modal_devin._config import WorkerConfig, WorkerSettings
 from modal_devin._exceptions import (
     ModalCompatibilityError,
@@ -22,6 +23,7 @@ from modal_devin.images import (
     _DEVIN_BIN,
     _DUMMY_TOKEN,
     _SIDECAR_PORT,
+    _SIDECAR_RECIPE_DIGEST,
     _build_sidecar_image_id,
     _create_sidecar,
 )
@@ -29,8 +31,12 @@ from modal_devin.images import (
 logger = logging.getLogger("modal_devin.worker")
 
 WORKDIR = "/root/workspace"
-_SIDECAR_IMAGE_KEY = "__modal_devin_sidecar_image_id__"
-_ACTIVE_STATUSES = {"pending", "claimed", "running", "resuming"}
+_SIDECAR_IMAGE_KEY = f"__modal_devin_sidecar_image_id__:{_SIDECAR_RECIPE_DIGEST}"
+_TERMINAL_STATUSES = {
+    SessionStatus.EXIT,
+    SessionStatus.ERROR,
+    SessionStatus.TERMINATED,
+}
 
 
 class SnapshotStore(Protocol):
@@ -39,6 +45,11 @@ class SnapshotStore(Protocol):
     def put(self, key: str, value: object, *, skip_if_exists: bool = False) -> bool: ...
 
     def pop(self, key: str, default: object = ...) -> object: ...
+
+
+def _configure_logging(settings: WorkerSettings) -> None:
+    """Apply the worker log level without changing the application's root logger."""
+    logger.setLevel(settings.log_level.upper())
 
 
 def _release_safely(client: OutpostsClient, session_id: str, acceptor_id: str, reason: str) -> None:
@@ -118,17 +129,21 @@ def _create_sandbox(
     )
 
 
-def _wait_for_sidecar(sandbox: modal.Sandbox) -> None:
+def _wait_for_sidecar(sandbox: modal.Sandbox, *, timeout_seconds: int) -> None:
+    attempts = max(1, math.ceil(timeout_seconds / 0.2))
     process = sandbox.exec(
         "sh",
         "-c",
-        f"for i in $(seq 1 300); do "
+        f"for i in $(seq 1 {attempts}); do "
         f"curl -fsS http://caddy:{_SIDECAR_PORT}/_modal_devin/health -o /dev/null "
         f"&& exit 0; sleep 0.2; done; "
         f"curl -v http://caddy:{_SIDECAR_PORT}/_modal_devin/health 2>&1; exit 1",
     )
     if process.wait() != 0:
-        raise RuntimeError("Caddy sidecar did not become ready:\n" + process.stdout.read())
+        raise RuntimeError(
+            f"Caddy sidecar did not become ready within {timeout_seconds} seconds:\n"
+            + process.stdout.read()
+        )
 
 
 def _final_status(
@@ -137,7 +152,7 @@ def _final_status(
     session_id: str,
     acceptor_id: str,
     settings: WorkerSettings,
-) -> tuple[bool, str | None]:
+) -> tuple[bool, SessionStatus | None]:
     """Return ``(known, status)`` without collapsing request failure into absence."""
     for attempt in range(1, settings.status_attempts + 1):
         try:
@@ -162,7 +177,10 @@ def _snapshot(
     snapshot_store: SnapshotStore,
     settings: WorkerSettings,
 ) -> None:
-    image = sandbox.snapshot_filesystem(ttl=settings.snapshot_ttl_seconds)
+    image = sandbox.snapshot_filesystem(
+        timeout=settings.snapshot_timeout_seconds,
+        ttl=settings.snapshot_ttl_seconds,
+    )
     image_id = image.object_id
     if image_id is None:
         raise RuntimeError("Modal returned a filesystem snapshot without an object ID")
@@ -203,7 +221,10 @@ def _run_claimed_session(
         except modal.exception.NotFoundError:
             snapshot_store.pop(_SIDECAR_IMAGE_KEY, None)
             raise
-        _wait_for_sidecar(sandbox)
+        _wait_for_sidecar(
+            sandbox,
+            timeout_seconds=settings.sidecar_ready_timeout_seconds,
+        )
 
         process = sandbox.exec(
             _DEVIN_BIN,
@@ -232,7 +253,8 @@ def _run_claimed_session(
             acceptor_id=config.acceptor_id,
             settings=settings,
         )
-        if not known or status in _ACTIVE_STATUSES:
+        safe_terminal = status is None or status in _TERMINAL_STATUSES
+        if not known or (status != SessionStatus.SUSPENDED and not safe_terminal):
             logger.warning(
                 "[%s] final session status is unsafe (%s); preserving a recovery snapshot",
                 session_id,
@@ -248,7 +270,7 @@ def _run_claimed_session(
                 f"could not establish a safe final state for session {session_id!r}"
             )
 
-        if status == "suspended":
+        if status == SessionStatus.SUSPENDED:
             _snapshot(
                 sandbox,
                 session_id=session_id,
@@ -284,12 +306,23 @@ def execute_session(
     sandbox_options: Mapping[str, Any],
 ) -> None:
     """Run one dispatched session and release it if any lifecycle step fails."""
-    logging.basicConfig(level=settings.log_level.upper())
+    _configure_logging(settings)
     client = OutpostsClient(
         config.api_url,
         token,
         timeout=settings.api_timeout_seconds,
     )
+    try:
+        claim = client.claim(session_id, config.acceptor_id)
+    except ClaimConflict:
+        logger.info("[%s] claim was acquired by another invocation", session_id)
+        return
+    logger.info(
+        "[%s] claimed with deadline %s; starting worker lifecycle",
+        session_id,
+        claim.deadline,
+    )
+
     try:
         snapshot_store = modal.Dict.from_name(
             config.snapshot_store_name,
@@ -322,8 +355,8 @@ def dispatch_pending_sessions(
     spawn_session: Callable[[str], object],
     token: str,
 ) -> None:
-    """Claim pending sessions and dispatch one Modal function call per claim."""
-    logging.basicConfig(level=settings.log_level.upper())
+    """Discover pending sessions and dispatch one Modal function call per session."""
+    _configure_logging(settings)
     snapshot_store = modal.Dict.from_name(
         config.snapshot_store_name,
         create_if_missing=True,
@@ -347,25 +380,11 @@ def dispatch_pending_sessions(
             sidecar_image_id = _build_sidecar_image_id(config.image_build_app_name)
             snapshot_store.put(_SIDECAR_IMAGE_KEY, sidecar_image_id)
         except Exception:
-            logger.exception("sidecar image build failed before claiming sessions")
+            logger.exception("sidecar image build failed before dispatching sessions")
             return
 
     for session_id in pending:
         try:
-            claim = client.claim(session_id, config.acceptor_id)
-        except ClaimConflict:
-            continue
-        except OutpostsAPIError as error:
-            logger.warning("[%s] claim failed: %s", session_id, error)
-            continue
-
-        logger.info(
-            "[%s] claimed with deadline %s; dispatching",
-            session_id,
-            claim.deadline,
-        )
-        try:
             spawn_session(session_id)
         except Exception:
             logger.exception("[%s] dispatch failed", session_id)
-            _release_safely(client, session_id, config.acceptor_id, "dispatch failure")

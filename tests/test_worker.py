@@ -32,6 +32,7 @@ def test_worker_exposes_domain_operations_not_an_application_builder():
 
     assert public_methods == {
         "base_image",
+        "controller_image",
         "dispatch_pending_sessions",
         "prepare_image",
         "run_session",
@@ -51,6 +52,15 @@ def test_base_image_remains_composable_until_prepare_image():
     assert "local files" in repr(image)
 
 
+def test_controller_image_does_not_carry_worker_dependencies():
+    worker = Worker("demo", pool_id="pool")
+
+    image = worker.controller_image()
+
+    assert "local files" in repr(image)
+    assert "chromium" not in repr(image)
+
+
 def test_session_function_timeout_includes_startup_and_cleanup_margin():
     worker = Worker(
         "demo",
@@ -58,10 +68,15 @@ def test_session_function_timeout_includes_startup_and_cleanup_margin():
         settings=WorkerSettings(
             session_timeout_seconds=900,
             sandbox_ready_timeout_seconds=45,
+            sidecar_ready_timeout_seconds=20,
+            snapshot_timeout_seconds=30,
+            api_timeout_seconds=10,
+            status_attempts=3,
+            status_retry_delay_seconds=2,
         ),
     )
 
-    assert worker.session_function_timeout_seconds == 1065
+    assert worker.session_function_timeout_seconds == 1081
 
 
 def test_run_session_delegates_runtime_mechanics(monkeypatch):

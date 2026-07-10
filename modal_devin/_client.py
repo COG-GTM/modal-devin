@@ -8,6 +8,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from types import TracebackType
 from typing import Protocol, TypeAlias, cast
 
@@ -53,6 +54,20 @@ class Claim:
     deadline: str | None
 
 
+class SessionStatus(StrEnum):
+    """Session states understood by the Outposts worker protocol."""
+
+    NEW = "new"
+    PENDING = "pending"
+    CLAIMED = "claimed"
+    RUNNING = "running"
+    RESUMING = "resuming"
+    SUSPENDED = "suspended"
+    EXIT = "exit"
+    ERROR = "error"
+    TERMINATED = "terminated"
+
+
 def _json_object(body: bytes, *, url: str) -> JsonObject:
     if not body:
         return {}
@@ -71,9 +86,12 @@ def _items(response: Mapping[str, JsonValue]) -> Iterable[Mapping[str, JsonValue
     items = response.get("items")
     if not isinstance(items, list):
         raise OutpostsProtocolError("Outposts response is missing an items array")
-    for item in items:
-        if isinstance(item, dict):
-            yield item
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise OutpostsProtocolError(
+                f"expected items[{index}] to be an object, got {type(item).__name__}"
+            )
+        yield item
 
 
 def _nested_string(mapping: Mapping[str, JsonValue], outer_key: str, inner_key: str) -> str | None:
@@ -82,6 +100,26 @@ def _nested_string(mapping: Mapping[str, JsonValue], outer_key: str, inner_key: 
         return None
     value = outer.get(inner_key)
     return value if isinstance(value, str) else None
+
+
+def _required_nested_string(
+    mapping: Mapping[str, JsonValue],
+    outer_key: str,
+    inner_key: str,
+    *,
+    context: str,
+) -> str:
+    value = _nested_string(mapping, outer_key, inner_key)
+    if value is None:
+        raise OutpostsProtocolError(f"{context} is missing {outer_key}.{inner_key}")
+    return value
+
+
+def _session_status(value: str) -> SessionStatus:
+    try:
+        return SessionStatus(value)
+    except ValueError as error:
+        raise OutpostsProtocolError(f"unknown Outposts session status: {value!r}") from error
 
 
 class OutpostsClient:
@@ -134,10 +172,15 @@ class OutpostsClient:
         query = urllib.parse.urlencode({"pool": pool_id, "phase": "pending"})
         response = self._request("GET", f"/opbeta/outposts/devins?{query}")
         session_ids: list[str] = []
-        for item in _items(response):
-            session_id = _nested_string(item, "metadata", "session_id")
-            if session_id is not None:
-                session_ids.append(session_id)
+        for index, item in enumerate(_items(response)):
+            session_ids.append(
+                _required_nested_string(
+                    item,
+                    "metadata",
+                    "session_id",
+                    context=f"pending item {index}",
+                )
+            )
         return tuple(session_ids)
 
     def claim(self, session_id: str, acceptor_id: str) -> Claim:
@@ -160,10 +203,22 @@ class OutpostsClient:
             {"acceptor_id": acceptor_id},
         )
 
-    def session_status(self, session_id: str, acceptor_id: str) -> str | None:
+    def session_status(self, session_id: str, acceptor_id: str) -> SessionStatus | None:
         query = urllib.parse.urlencode({"phase": "claimed", "acceptor_id": acceptor_id})
         response = self._request("GET", f"/opbeta/outposts/devins?{query}")
-        for item in _items(response):
-            if _nested_string(item, "metadata", "session_id") == session_id:
-                return _nested_string(item, "status", "session_status")
+        for index, item in enumerate(_items(response)):
+            item_session_id = _required_nested_string(
+                item,
+                "metadata",
+                "session_id",
+                context=f"claimed item {index}",
+            )
+            if item_session_id == session_id:
+                value = _required_nested_string(
+                    item,
+                    "status",
+                    "session_status",
+                    context=f"claimed session {session_id!r}",
+                )
+                return _session_status(value)
         return None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import shlex
 import urllib.parse
@@ -47,6 +48,11 @@ _CADDY_INSTALL = (
     "&& chmod +x /usr/local/bin/caddy "
     "&& rm /tmp/caddy.tar.gz"
 )
+# Bump the schema if _sidecar_image changes outside these embedded inputs.
+_SIDECAR_RECIPE_SCHEMA = "1"
+_SIDECAR_RECIPE_DIGEST = hashlib.sha256(
+    (_SIDECAR_RECIPE_SCHEMA + "\0" + _CADDY_INSTALL + "\0" + _CADDYFILE).encode()
+).hexdigest()[:12]
 
 _DUMMY_TOKEN = "cog_sidecarmanaged00000000000000000000000000000000"
 _SIDECAR_PORT = 8686
@@ -91,6 +97,13 @@ def _worker_image(
     return image
 
 
+def _controller_image(*, python_version: str = "3.12") -> modal.Image:
+    """Return a small image for scheduler and other control-plane functions."""
+    return modal.Image.debian_slim(python_version=python_version).add_local_python_source(
+        "modal_devin"
+    )
+
+
 def _finalize_worker_image(image: modal.Image) -> modal.Image:
     """Add modal-devin source as the final, startup-mounted image operation."""
     return image.add_local_python_source("modal_devin")
@@ -112,12 +125,12 @@ def clone_private_repo(
         raise ValueError(f"repo_url must be a full https:// URL, got: {repo_url!r}")
     if parsed.username or parsed.password:
         raise ValueError("repo_url must not include credentials")
+    if parsed.query:
+        raise ValueError("repo_url must not include a query string")
     if parsed.fragment:
         raise ValueError("repo_url must not include a URL fragment")
 
-    plain_repo_url = urllib.parse.urlunsplit(
-        (parsed.scheme, parsed.netloc, parsed.path, parsed.query, "")
-    )
+    plain_repo_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
     secret_desc = token_secret.name or "<secret>"
     fail_msg = (
         f"{token_env_var} is empty -- does secret {secret_desc} have a key named {token_env_var}?"

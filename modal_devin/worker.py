@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,9 +17,10 @@ from modal_devin._runtime import (
     dispatch_pending_sessions as _dispatch_pending_sessions,
 )
 from modal_devin._runtime import execute_session as _execute_session
-from modal_devin.images import _finalize_worker_image, _worker_image
+from modal_devin.images import _controller_image, _finalize_worker_image, _worker_image
 
 _SANDBOX_RESERVED_OPTIONS = {"readiness_probe", "timeout", "workdir"}
+_TERMINATION_MARGIN_SECONDS = 30
 _P = ParamSpec("_P")
 
 
@@ -28,11 +30,7 @@ def _sandbox_create_signature(
     [Callable[..., None]],
     Callable[Concatenate[object, str, _P], None],
 ]:
-    """Type a Worker method as a positional prefix plus ``Sandbox.create``.
-
-    ``ParamSpec`` keeps the keyword surface synchronized with the installed Modal
-    SDK. The runtime method still validates the narrower modal-devin contract.
-    """
+    """Type a Worker method as a positional prefix plus ``Sandbox.create``."""
     create_signature = inspect.signature(create)
 
     def decorate(
@@ -136,11 +134,25 @@ class Worker:
     @property
     def session_function_timeout_seconds(self) -> int:
         """The minimum safe timeout for the outer Modal session function."""
-        return (
+        status_request_budget = self.settings.status_attempts * self.settings.api_timeout_seconds
+        status_retry_delay_budget = self.settings.status_retry_delay_seconds * sum(
+            range(1, self.settings.status_attempts)
+        )
+        claim_and_release_budget = 2 * self.settings.api_timeout_seconds
+        return math.ceil(
             self.settings.session_timeout_seconds
             + self.settings.sandbox_ready_timeout_seconds
-            + 120
+            + self.settings.sidecar_ready_timeout_seconds
+            + status_request_budget
+            + status_retry_delay_budget
+            + self.settings.snapshot_timeout_seconds
+            + claim_and_release_budget
+            + _TERMINATION_MARGIN_SECONDS
         )
+
+    def controller_image(self, *, python_version: str = "3.12") -> modal.Image:
+        """Return the lightweight image used by scheduled control-plane functions."""
+        return _controller_image(python_version=python_version)
 
     def base_image(
         self,
@@ -205,7 +217,7 @@ class Worker:
         self,
         spawn_session: Callable[[str], object],
     ) -> None:
-        """Claim and dispatch every session currently pending for this worker."""
+        """Dispatch every pending session; each invocation claims when it starts."""
         if not callable(spawn_session):
             raise TypeError("spawn_session must be callable")
         _dispatch_pending_sessions(

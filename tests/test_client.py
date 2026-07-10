@@ -7,7 +7,7 @@ from email.message import Message
 import pytest
 
 from modal_devin import OutpostsAPIError, OutpostsProtocolError
-from modal_devin._client import ClaimConflict, OutpostsClient
+from modal_devin._client import ClaimConflict, OutpostsClient, SessionStatus
 
 
 class Response:
@@ -49,9 +49,7 @@ def make_client(recorder):
 
 
 def test_pending_sessions_are_typed_and_requests_have_standard_headers():
-    recorder = RecordingUrlOpen(
-        [{"items": [{"metadata": {"session_id": "devin-1"}}, {"bad": "item"}]}]
-    )
+    recorder = RecordingUrlOpen([{"items": [{"metadata": {"session_id": "devin-1"}}]}])
 
     result = make_client(recorder).pending_session_ids("pool with spaces")
 
@@ -94,7 +92,15 @@ def test_http_and_transport_failures_have_domain_exceptions():
         )
 
 
-@pytest.mark.parametrize("body", [[], {"not_items": []}])
+@pytest.mark.parametrize(
+    "body",
+    [
+        [],
+        {"not_items": []},
+        {"items": ["not-an-object"]},
+        {"items": [{"bad": "item"}]},
+    ],
+)
 def test_malformed_responses_raise_protocol_errors(body):
     recorder = RecordingUrlOpen([body])
 
@@ -109,6 +115,48 @@ def test_status_distinguishes_successful_absence_from_request_failure():
     failing = make_client(RecordingUrlOpen([urllib.error.URLError("offline")]))
     with pytest.raises(OutpostsAPIError):
         failing.session_status("devin-1", "modal-worker")
+
+
+def test_status_is_parsed_into_a_closed_protocol_type():
+    known = make_client(
+        RecordingUrlOpen(
+            [
+                {
+                    "items": [
+                        {
+                            "metadata": {"session_id": "devin-1"},
+                            "status": {"session_status": "suspended"},
+                        }
+                    ]
+                }
+            ]
+        )
+    )
+
+    assert known.session_status("devin-1", "modal-worker") is SessionStatus.SUSPENDED
+
+    unknown = make_client(
+        RecordingUrlOpen(
+            [
+                {
+                    "items": [
+                        {
+                            "metadata": {"session_id": "devin-1"},
+                            "status": {"session_status": "future-state"},
+                        }
+                    ]
+                }
+            ]
+        )
+    )
+    with pytest.raises(OutpostsProtocolError, match="unknown Outposts session status"):
+        unknown.session_status("devin-1", "modal-worker")
+
+    missing = make_client(
+        RecordingUrlOpen([{"items": [{"metadata": {"session_id": "devin-1"}, "status": {}}]}])
+    )
+    with pytest.raises(OutpostsProtocolError, match=r"status\.session_status"):
+        missing.session_status("devin-1", "modal-worker")
 
 
 def test_response_size_is_bounded():

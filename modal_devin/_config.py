@@ -19,6 +19,8 @@ DEFAULT_SNAPSHOT_TTL_SECONDS = 30 * 24 * 60 * 60
 DEFAULT_STATUS_ATTEMPTS = 3
 DEFAULT_STATUS_RETRY_DELAY_SECONDS = 1.0
 DEFAULT_SANDBOX_READY_TIMEOUT_SECONDS = 120
+DEFAULT_SIDECAR_READY_TIMEOUT_SECONDS = 60
+DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 120
 
 _RESOURCE_COMPONENT_RE = re.compile(r"[^a-z0-9._-]+")
 _ENV_PREFIX = "MODAL_DEVIN_"
@@ -63,6 +65,8 @@ class WorkerSettings:
     status_attempts: int = DEFAULT_STATUS_ATTEMPTS
     status_retry_delay_seconds: float = DEFAULT_STATUS_RETRY_DELAY_SECONDS
     sandbox_ready_timeout_seconds: int = DEFAULT_SANDBOX_READY_TIMEOUT_SECONDS
+    sidecar_ready_timeout_seconds: int = DEFAULT_SIDECAR_READY_TIMEOUT_SECONDS
+    snapshot_timeout_seconds: int = DEFAULT_SNAPSHOT_TIMEOUT_SECONDS
     log_level: str = "INFO"
 
     def __post_init__(self) -> None:
@@ -72,6 +76,8 @@ class WorkerSettings:
             "api_timeout_seconds",
             "status_attempts",
             "sandbox_ready_timeout_seconds",
+            "sidecar_ready_timeout_seconds",
+            "snapshot_timeout_seconds",
         )
         for name in positive:
             if getattr(self, name) <= 0:
@@ -98,6 +104,8 @@ class WorkerSettings:
             "session_timeout_seconds",
             "status_attempts",
             "sandbox_ready_timeout_seconds",
+            "sidecar_ready_timeout_seconds",
+            "snapshot_timeout_seconds",
         }
         float_fields = {"api_timeout_seconds", "status_retry_delay_seconds"}
         for field in fields(cls):

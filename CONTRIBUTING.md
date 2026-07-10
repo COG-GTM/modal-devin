@@ -29,6 +29,15 @@ Modal Dicts through the public API.
 Modal's full constructor: modal-devin owns command arguments, timeout, workdir, and
 the readiness probe.
 
+The scheduler may discover and spawn pending session IDs, but it must not acquire
+their Outposts claims. Claiming belongs inside the spawned session invocation so a
+Modal queue delay or retry cannot outlive the claim deadline. Unknown upstream
+status values must fail closed and preserve a recovery snapshot.
+
+The sidecar image cache key includes the Caddy configuration, install recipe, and
+`_SIDECAR_RECIPE_SCHEMA`. Bump that schema whenever `_sidecar_image()` changes in a
+way not represented by the embedded inputs.
+
 ## Checks
 
 Run the same checks as CI:
