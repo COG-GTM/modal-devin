@@ -53,6 +53,7 @@ def session(session_id: str) -> None:
     image=controller_image,
     secrets=[devin_secret],
     schedule=modal.Period(seconds=worker.settings.scheduler_interval_seconds),
+    max_containers=1,
 )
 def scheduler() -> None:
     worker.dispatch_pending_sessions(session.spawn)

@@ -69,6 +69,7 @@ def session(session_id: str) -> None:
     image=controller_image,
     secrets=[devin_secret],
     schedule=modal.Period(seconds=worker.settings.scheduler_interval_seconds),
+    max_containers=1,
 )
 def scheduler() -> None:
     worker.dispatch_pending_sessions(session.spawn)
@@ -175,25 +176,33 @@ operational overrides:
 | `MODAL_DEVIN_LOG_LEVEL` | `INFO` |
 
 Set `MODAL_DEVIN_SNAPSHOT_TTL_SECONDS=none` to retain snapshots indefinitely.
-`session_function_timeout_seconds` derives the minimum safe outer timeout from the
-session, readiness, final-status retry, snapshot, claim-release, and cleanup budgets;
-you may set a larger value in the decorator.
+`MODAL_DEVIN_SESSION_TIMEOUT_SECONDS` applies to the Devin worker command itself. The
+Sandbox receives a larger derived lifetime for readiness, sidecar startup, final-status
+retry, snapshotting, and cleanup. `session_function_timeout_seconds` additionally
+budgets claim and release requests for the outer function; you may set a larger value
+in the decorator.
 
 ## Resumability
 
 Filesystem snapshots are stored by Modal image ID in a dedicated Modal Dict,
-keyed by Devin session ID. This avoids placing arbitrary or long session IDs in
-Modal resource names and follows [Modal's documented persistence pattern](https://modal.com/docs/guide/sandbox-snapshots#persisting-sandbox-state).
+indexed under a digest of the Devin session ID. This keeps arbitrary or long session
+IDs out of persistent keys and follows [Modal's documented persistence pattern](https://modal.com/docs/guide/sandbox-snapshots#persisting-sandbox-state).
 
 The runtime:
 
-1. dispatches pending IDs without holding a claim while Modal queues the invocation;
-2. claims after the session function starts, making duplicate dispatches and retries safe;
-3. restores a stored snapshot and waits for the Sandbox readiness probe;
-4. removes an expired snapshot reference and falls back to the base image;
-5. validates final status against the known Outposts protocol and retries lookups;
-6. takes a recovery snapshot when status is unavailable, unknown, or active;
-7. removes the snapshot mapping after a completed session.
+1. reserves pending IDs before dispatch, preventing each scheduler tick from enqueueing
+   the same session while preserving a bounded retry lease;
+2. dispatches without holding an Outposts claim while Modal queues the invocation;
+3. claims after the session function starts, making retries safe;
+4. restores a stored snapshot and waits for the Sandbox readiness probe;
+5. removes an expired snapshot reference and falls back to the base image;
+6. validates final status against the known Outposts protocol and retries lookups;
+7. takes a recovery snapshot when status is unavailable, unknown, or active;
+8. removes the snapshot mapping after a completed session.
+
+The scheduler refreshes snapshot-index entries once per day so Modal Dict's inactivity
+expiry cannot outlive the configured snapshot retention while the deployment is active.
+Keep the scheduler deployed when relying on 30-day or indefinite resumability.
 
 A nonzero Devin worker exit raises `WorkerExitedError`, so Modal records a failed
 invocation instead of a successful one.

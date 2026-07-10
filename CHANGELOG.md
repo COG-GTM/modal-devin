@@ -39,6 +39,13 @@ and uses semantic versioning.
 - Nonzero Devin worker exits now raise `WorkerExitedError`.
 - Outer function timeouts now account for status requests and backoff, sidecar
   readiness, snapshot creation, claim release, and cleanup.
+- The Devin worker command receives the configured session timeout directly, while
+  the containing Sandbox receives a larger lifecycle budget for startup and recovery.
+- Scheduler transport, protocol, image-build, and dispatch failures now fail the
+  scheduled invocation after attempting every independent dispatch.
+- Pending session dispatches use bounded leases to avoid duplicate Modal queue entries.
+- Snapshot index entries are refreshed daily while the scheduler is deployed, keeping
+  their retention aligned with 30-day or indefinite filesystem snapshots.
 - Package installation is documented as a project dependency rather than an
   isolated tool installation.
 - Scheduler invocations now surface protocol, sidecar-build, and dispatch failures;

@@ -40,6 +40,9 @@ class Store:
             return self.values.pop(key)
         return self.values.pop(key, default)
 
+    def keys(self):
+        return iter(tuple(self.values))
+
 
 class Process:
     def __init__(self, returncode=0, output=("worker output\n",)):
@@ -153,15 +156,16 @@ def test_suspended_session_is_snapshotted_by_id(monkeypatch, config, settings):
         sandbox=sandbox,
     )
 
-    assert store.values["devin-1"] == "im-snapshot"
+    assert store.values[runtime._snapshot_key("devin-1")] == "im-snapshot"
     assert sandbox.snapshot_calls == [(settings.snapshot_timeout_seconds, 123)]
     assert sandbox.terminated
     [(_args, kwargs)] = sandbox.exec_calls
     assert kwargs["stderr"].name == "STDOUT"
+    assert kwargs["timeout"] == settings.session_timeout_seconds
 
 
 def test_completed_session_removes_old_snapshot(monkeypatch, config, settings):
-    store = Store({"devin-1": "im-old"})
+    store = Store({runtime._snapshot_key("devin-1"): "im-old"})
 
     run_claimed(
         monkeypatch,
@@ -172,7 +176,7 @@ def test_completed_session_removes_old_snapshot(monkeypatch, config, settings):
         sandbox=Sandbox(),
     )
 
-    assert "devin-1" not in store.values
+    assert runtime._snapshot_key("devin-1") not in store.values
 
 
 def test_nonzero_worker_exit_is_a_failed_modal_invocation(monkeypatch, config, settings):
@@ -204,7 +208,7 @@ def test_status_transport_failure_preserves_snapshot_then_fails(monkeypatch, con
             sandbox=sandbox,
         )
 
-    assert store.values["devin-1"] == "im-snapshot"
+    assert store.values[runtime._snapshot_key("devin-1")] == "im-snapshot"
     assert sandbox.terminated
 
 
@@ -227,12 +231,12 @@ def test_nonterminal_or_unknown_status_is_preserved_for_recovery(
             sandbox=Sandbox(),
         )
 
-    assert store.values["devin-1"] == "im-snapshot"
+    assert store.values[runtime._snapshot_key("devin-1")] == "im-snapshot"
 
 
 @pytest.mark.parametrize("status", ["exit", "error", "terminated"])
 def test_known_terminal_status_removes_old_snapshot(monkeypatch, config, settings, status):
-    store = Store({"devin-1": "im-old"})
+    store = Store({runtime._snapshot_key("devin-1"): "im-old"})
 
     run_claimed(
         monkeypatch,
@@ -243,12 +247,18 @@ def test_known_terminal_status_removes_old_snapshot(monkeypatch, config, setting
         sandbox=Sandbox(),
     )
 
-    assert "devin-1" not in store.values
+    assert runtime._snapshot_key("devin-1") not in store.values
 
 
 def test_run_session_releases_claim_after_any_failure(monkeypatch, config, settings):
     client = Client()
-    store = Store({runtime._SIDECAR_IMAGE_KEY: "im-sidecar"})
+    dispatch_key = runtime._dispatch_key("devin-1")
+    store = Store(
+        {
+            runtime._SIDECAR_IMAGE_KEY: "im-sidecar",
+            dispatch_key: 9_999_999.0,
+        }
+    )
     monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
     monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
     monkeypatch.setattr(
@@ -270,12 +280,14 @@ def test_run_session_releases_claim_after_any_failure(monkeypatch, config, setti
 
     assert client.releases == [("devin-1", config.acceptor_id)]
     assert client.claims == [("devin-1", config.acceptor_id)]
+    assert dispatch_key not in store.values
 
 
 def test_run_session_claim_conflict_is_a_successful_duplicate(monkeypatch, config, settings):
     client = Client(claim_error=ClaimConflict("devin-1"))
     run_claimed_session = Mock()
     monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
+    monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=Store()))
     monkeypatch.setattr(runtime, "_run_claimed_session", run_claimed_session)
 
     runtime.execute_session(
@@ -291,6 +303,27 @@ def test_run_session_claim_conflict_is_a_successful_duplicate(monkeypatch, confi
     assert client.claims == [("devin-1", config.acceptor_id)]
     assert client.releases == []
     run_claimed_session.assert_not_called()
+
+
+def test_started_invocation_clears_its_lease_before_claiming(monkeypatch, config, settings):
+    client = Client(claim_error=OutpostsAPIError("offline"))
+    dispatch_key = runtime._dispatch_key("devin-1")
+    store = Store({dispatch_key: 9_999_999.0})
+    monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
+    monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
+
+    with pytest.raises(OutpostsAPIError, match="offline"):
+        runtime.execute_session(
+            app=Mock(),
+            image=Mock(),
+            config=config,
+            settings=settings,
+            session_id="devin-1",
+            token="token",
+            sandbox_options={},
+        )
+
+    assert dispatch_key not in store.values
 
 
 def test_modal_retry_reacquires_the_claim(monkeypatch, config, settings):
@@ -342,7 +375,7 @@ def test_run_session_releases_claim_when_sidecar_preparation_is_missing(
 
 
 def test_lazy_snapshot_expiry_falls_back_and_forgets_mapping(monkeypatch, config, settings):
-    store = Store({"devin-1": "im-expired"})
+    store = Store({runtime._snapshot_key("devin-1"): "im-expired"})
     fresh = Mock(name="fresh")
     create = Mock(side_effect=[modal.exception.NotFoundError("gone"), fresh])
     monkeypatch.setattr(runtime, "_new_sandbox", create)
@@ -359,14 +392,15 @@ def test_lazy_snapshot_expiry_falls_back_and_forgets_mapping(monkeypatch, config
     )
 
     assert result is fresh
-    assert "devin-1" not in store.values
+    assert runtime._snapshot_key("devin-1") not in store.values
     assert create.call_count == 2
 
 
 def test_readiness_failure_terminates_the_half_started_sandbox(monkeypatch, settings):
     sandbox = Mock()
     sandbox.wait_until_ready.side_effect = modal.exception.NotFoundError("image expired")
-    monkeypatch.setattr(runtime.modal.Sandbox, "create", Mock(return_value=sandbox))
+    create = Mock(return_value=sandbox)
+    monkeypatch.setattr(runtime.modal.Sandbox, "create", create)
 
     with pytest.raises(modal.exception.NotFoundError):
         runtime._new_sandbox(
@@ -377,6 +411,7 @@ def test_readiness_failure_terminates_the_half_started_sandbox(monkeypatch, sett
         )
 
     sandbox.terminate.assert_called_once_with()
+    assert create.call_args.kwargs["timeout"] == runtime._sandbox_lifetime_seconds(settings)
 
 
 def test_sidecar_readiness_failure_includes_diagnostics():
@@ -511,6 +546,7 @@ def test_scheduler_does_not_release_an_unclaimed_session_when_spawn_fails(
 
     assert len(exc_info.value.exceptions) == 1
     assert "devin-1" in "\n".join(exc_info.value.exceptions[0].__notes__)
+    assert runtime._dispatch_key("devin-1") not in store.values
     assert client.released == []
     assert client.claimed == []
 
@@ -533,18 +569,19 @@ def test_scheduler_dispatches_without_acquiring_the_claim(monkeypatch, config, s
     assert client.claimed == []
 
 
-def test_scheduler_request_failure_is_deferred_to_the_next_tick(monkeypatch, config, settings):
+def test_scheduler_request_failure_is_not_hidden(monkeypatch, config, settings):
     client = PollClient(pending=OutpostsAPIError("offline"))
     monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
     monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=Store()))
     spawn = Mock()
 
-    runtime.dispatch_pending_sessions(
-        config=config,
-        settings=settings,
-        spawn_session=spawn,
-        token="token",
-    )
+    with pytest.raises(OutpostsAPIError, match="offline"):
+        runtime.dispatch_pending_sessions(
+            config=config,
+            settings=settings,
+            spawn_session=spawn,
+            token="token",
+        )
 
     spawn.assert_not_called()
 
@@ -601,3 +638,58 @@ def test_scheduler_attempts_all_dispatches_before_reporting_failures(monkeypatch
 
     assert [call.args[0] for call in spawn.call_args_list] == ["devin-1", "devin-2", "devin-3"]
     assert len(exc_info.value.exceptions) == 2
+
+
+def test_scheduler_deduplicates_queued_session_invocations(monkeypatch, config, settings):
+    client = PollClient()
+    monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
+    store = Store({runtime._SIDECAR_IMAGE_KEY: "im-sidecar"})
+    monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
+    monkeypatch.setattr(runtime.time, "time", Mock(return_value=1_000.0))
+    spawn = Mock()
+
+    for _ in range(2):
+        runtime.dispatch_pending_sessions(
+            config=config,
+            settings=settings,
+            spawn_session=spawn,
+            token="token",
+        )
+
+    spawn.assert_called_once_with("devin-1")
+    assert store.values[runtime._dispatch_key("devin-1")] > 1_000.0
+
+
+def test_scheduler_retries_an_expired_dispatch_lease(monkeypatch, config, settings):
+    client = PollClient()
+    monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
+    lease_key = runtime._dispatch_key("devin-1")
+    store = Store({runtime._SIDECAR_IMAGE_KEY: "im-sidecar", lease_key: 999.0})
+    monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
+    monkeypatch.setattr(runtime.time, "time", Mock(return_value=1_000.0))
+    spawn = Mock()
+
+    runtime.dispatch_pending_sessions(
+        config=config,
+        settings=settings,
+        spawn_session=spawn,
+        token="token",
+    )
+
+    spawn.assert_called_once_with("devin-1")
+    assert store.values[lease_key] > 1_000.0
+
+
+def test_scheduler_refreshes_snapshot_index_once_per_day(monkeypatch):
+    snapshot_key = runtime._snapshot_key("devin-1")
+    store = Store({snapshot_key: "im-snapshot", runtime._SIDECAR_IMAGE_KEY: "im-sidecar"})
+    get = Mock(wraps=store.get)
+    store.get = get
+    now = 1_000_000.0
+    monkeypatch.setattr(runtime.time, "time", Mock(return_value=now))
+
+    runtime._refresh_snapshot_index(store)
+    runtime._refresh_snapshot_index(store)
+
+    assert sum(call.args == (snapshot_key,) for call in get.call_args_list) == 1
+    assert store.values[runtime._SNAPSHOT_INDEX_REFRESH_KEY] == now

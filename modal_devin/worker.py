@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -11,7 +10,12 @@ from typing import Any, Concatenate, ParamSpec, Self, cast
 
 import modal
 
-from modal_devin._config import DEFAULT_API_URL, WorkerConfig, WorkerSettings
+from modal_devin._config import (
+    DEFAULT_API_URL,
+    WorkerConfig,
+    WorkerSettings,
+    _session_function_timeout_seconds,
+)
 from modal_devin._exceptions import ConfigurationError
 from modal_devin._runtime import (
     dispatch_pending_sessions as _dispatch_pending_sessions,
@@ -20,7 +24,6 @@ from modal_devin._runtime import execute_session as _execute_session
 from modal_devin.images import _controller_image, _finalize_worker_image, _worker_image
 
 _SANDBOX_RESERVED_OPTIONS = {"readiness_probe", "timeout", "workdir"}
-_TERMINATION_MARGIN_SECONDS = 30
 _P = ParamSpec("_P")
 
 
@@ -134,21 +137,7 @@ class Worker:
     @property
     def session_function_timeout_seconds(self) -> int:
         """The minimum safe timeout for the outer Modal session function."""
-        status_request_budget = self.settings.status_attempts * self.settings.api_timeout_seconds
-        status_retry_delay_budget = self.settings.status_retry_delay_seconds * sum(
-            range(1, self.settings.status_attempts)
-        )
-        claim_and_release_budget = 2 * self.settings.api_timeout_seconds
-        return math.ceil(
-            self.settings.session_timeout_seconds
-            + self.settings.sandbox_ready_timeout_seconds
-            + self.settings.sidecar_ready_timeout_seconds
-            + status_request_budget
-            + status_retry_delay_budget
-            + self.settings.snapshot_timeout_seconds
-            + claim_and_release_budget
-            + _TERMINATION_MARGIN_SECONDS
-        )
+        return _session_function_timeout_seconds(self.settings)
 
     def controller_image(self, *, python_version: str = "3.12") -> modal.Image:
         """Return the lightweight image used by scheduled control-plane functions."""

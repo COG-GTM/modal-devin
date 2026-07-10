@@ -34,6 +34,11 @@ their Outposts claims. Claiming belongs inside the spawned session invocation so
 Modal queue delay or retry cannot outlive the claim deadline. Unknown upstream
 status values must fail closed and preserve a recovery snapshot.
 
+Keep the generated scheduler at `max_containers=1`. Dispatch leases are acquired
+before spawning and cleared when the session invocation starts; serialized scheduler
+runs make stale-lease replacement deterministic. Scheduler failures must propagate so
+Modal can alert and apply configured retries.
+
 The sidecar image cache key includes the Caddy configuration, install recipe, and
 `_SIDECAR_RECIPE_SCHEMA`. Bump that schema whenever `_sidecar_image()` changes in a
 way not represented by the embedded inputs.

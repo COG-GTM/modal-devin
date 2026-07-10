@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import urllib.parse
@@ -21,6 +22,8 @@ DEFAULT_STATUS_RETRY_DELAY_SECONDS = 1.0
 DEFAULT_SANDBOX_READY_TIMEOUT_SECONDS = 120
 DEFAULT_SIDECAR_READY_TIMEOUT_SECONDS = 60
 DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 120
+
+_TERMINATION_MARGIN_SECONDS = 30
 
 _RESOURCE_COMPONENT_RE = re.compile(r"[^a-z0-9._-]+")
 _ENV_PREFIX = "MODAL_DEVIN_"
@@ -125,6 +128,32 @@ class WorkerSettings:
                 env_name = _ENV_PREFIX + field.name.upper()
                 raise ConfigurationError(f"invalid value for {env_name}: {raw!r}") from error
         return cls(**cast(dict[str, Any], values))
+
+
+def _status_budget_seconds(settings: WorkerSettings) -> float:
+    request_budget = settings.status_attempts * settings.api_timeout_seconds
+    retry_delay_budget = settings.status_retry_delay_seconds * sum(
+        range(1, settings.status_attempts)
+    )
+    return request_budget + retry_delay_budget
+
+
+def _sandbox_lifetime_seconds(settings: WorkerSettings) -> int:
+    """Maximum Sandbox lifetime including work, startup, and recovery."""
+    return math.ceil(
+        settings.session_timeout_seconds
+        + settings.sandbox_ready_timeout_seconds
+        + settings.sidecar_ready_timeout_seconds
+        + _status_budget_seconds(settings)
+        + settings.snapshot_timeout_seconds
+        + _TERMINATION_MARGIN_SECONDS
+    )
+
+
+def _session_function_timeout_seconds(settings: WorkerSettings) -> int:
+    """Minimum outer Function timeout around one complete Sandbox lifecycle."""
+    claim_and_release_budget = 2 * settings.api_timeout_seconds
+    return math.ceil(_sandbox_lifetime_seconds(settings) + claim_and_release_budget)
 
 
 @dataclass(frozen=True, slots=True)

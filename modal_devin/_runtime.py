@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, Protocol
 
 import modal
 from modal.stream_type import StreamType
 
 from modal_devin._client import ClaimConflict, OutpostsClient, SessionStatus
-from modal_devin._config import WorkerConfig, WorkerSettings
+from modal_devin._config import (
+    WorkerConfig,
+    WorkerSettings,
+    _sandbox_lifetime_seconds,
+    _session_function_timeout_seconds,
+)
 from modal_devin._exceptions import (
     ModalCompatibilityError,
     OutpostsAPIError,
@@ -38,6 +44,10 @@ _TERMINAL_STATUSES = {
     SessionStatus.ERROR,
     SessionStatus.TERMINATED,
 }
+_SNAPSHOT_KEY_PREFIX = "__modal_devin_snapshot__:"
+_DISPATCH_KEY_PREFIX = "__modal_devin_dispatch__:"
+_SNAPSHOT_INDEX_REFRESH_KEY = "__modal_devin_snapshot_index_refreshed_at__"
+_SNAPSHOT_INDEX_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60
 
 
 class SnapshotStore(Protocol):
@@ -46,6 +56,55 @@ class SnapshotStore(Protocol):
     def put(self, key: str, value: object, *, skip_if_exists: bool = False) -> bool: ...
 
     def pop(self, key: str, default: object = ...) -> object: ...
+
+    def keys(self) -> Iterable[object]: ...
+
+
+def _session_store_key(prefix: str, session_id: str) -> str:
+    return prefix + hashlib.sha256(session_id.encode()).hexdigest()
+
+
+def _snapshot_key(session_id: str) -> str:
+    return _session_store_key(_SNAPSHOT_KEY_PREFIX, session_id)
+
+
+def _dispatch_key(session_id: str) -> str:
+    return _session_store_key(_DISPATCH_KEY_PREFIX, session_id)
+
+
+def _refresh_snapshot_index(snapshot_store: SnapshotStore) -> None:
+    """Keep the Modal Dict index alive for snapshots with longer retention."""
+    now = time.time()
+    last_refresh = snapshot_store.get(_SNAPSHOT_INDEX_REFRESH_KEY)
+    if isinstance(last_refresh, (int, float)) and (
+        now - last_refresh < _SNAPSHOT_INDEX_REFRESH_INTERVAL_SECONDS
+    ):
+        return
+
+    for key in snapshot_store.keys():  # noqa: SIM118 - remote Dict is not directly iterable
+        if isinstance(key, str) and key.startswith(_SNAPSHOT_KEY_PREFIX):
+            snapshot_store.get(key)
+    snapshot_store.put(_SNAPSHOT_INDEX_REFRESH_KEY, now)
+
+
+def _reserve_dispatch(
+    snapshot_store: SnapshotStore,
+    session_id: str,
+    settings: WorkerSettings,
+) -> bool:
+    """Acquire a bounded queueing lease for one session dispatch."""
+    key = _dispatch_key(session_id)
+    now = time.time()
+    current_expiry = snapshot_store.get(key)
+    if isinstance(current_expiry, (int, float)) and current_expiry > now:
+        return False
+    if current_expiry is not None:
+        snapshot_store.pop(key, None)
+    return snapshot_store.put(
+        key,
+        now + _session_function_timeout_seconds(settings),
+        skip_if_exists=True,
+    )
 
 
 def _configure_logging(settings: WorkerSettings) -> None:
@@ -75,7 +134,7 @@ def _new_sandbox(
         app=app,
         image=image,
         workdir=WORKDIR,
-        timeout=settings.session_timeout_seconds,
+        timeout=_sandbox_lifetime_seconds(settings),
         readiness_probe=modal.sandbox.Probe.with_exec("test", "-d", WORKDIR),
         **sandbox_options,
     )
@@ -103,7 +162,8 @@ def _create_sandbox(
     settings: WorkerSettings,
     sandbox_options: Mapping[str, Any],
 ) -> modal.Sandbox:
-    snapshot_id = snapshot_store.get(session_id)
+    snapshot_key = _snapshot_key(session_id)
+    snapshot_id = snapshot_store.get(snapshot_key)
     if isinstance(snapshot_id, str):
         try:
             sandbox = _new_sandbox(
@@ -115,7 +175,7 @@ def _create_sandbox(
             logger.info("[%s] resumed from filesystem snapshot %s", session_id, snapshot_id)
             return sandbox
         except modal.exception.NotFoundError:
-            snapshot_store.pop(session_id, None)
+            snapshot_store.pop(snapshot_key, None)
             logger.warning(
                 "[%s] snapshot %s expired; starting from the base image",
                 session_id,
@@ -185,7 +245,7 @@ def _snapshot(
     image_id = image.object_id
     if image_id is None:
         raise RuntimeError("Modal returned a filesystem snapshot without an object ID")
-    snapshot_store.put(session_id, image_id)
+    snapshot_store.put(_snapshot_key(session_id), image_id)
     logger.info("[%s] stored filesystem snapshot %s", session_id, image_id)
 
 
@@ -242,6 +302,7 @@ def _run_claimed_session(
                 "DEVIN_OUTPOSTS_TOKEN": _DUMMY_TOKEN,
             },
             stderr=StreamType.STDOUT,
+            timeout=settings.session_timeout_seconds,
         )
         for line in process.stdout:
             logger.info("[%s] %s", session_id, line.rstrip())
@@ -279,7 +340,7 @@ def _run_claimed_session(
                 settings=settings,
             )
         else:
-            snapshot_store.pop(session_id, None)
+            snapshot_store.pop(_snapshot_key(session_id), None)
 
         if returncode != 0:
             raise WorkerExitedError(session_id, returncode)
@@ -313,6 +374,11 @@ def execute_session(
         token,
         timeout=settings.api_timeout_seconds,
     )
+    snapshot_store = modal.Dict.from_name(
+        config.snapshot_store_name,
+        create_if_missing=True,
+    )
+    snapshot_store.pop(_dispatch_key(session_id), None)
     try:
         claim = client.claim(session_id, config.acceptor_id)
     except ClaimConflict:
@@ -325,10 +391,6 @@ def execute_session(
     )
 
     try:
-        snapshot_store = modal.Dict.from_name(
-            config.snapshot_store_name,
-            create_if_missing=True,
-        )
         sidecar_image_id = snapshot_store.get(_SIDECAR_IMAGE_KEY)
         if not isinstance(sidecar_image_id, str):
             raise ModalCompatibilityError("worker sidecar image has not been prepared")
@@ -362,6 +424,7 @@ def dispatch_pending_sessions(
         config.snapshot_store_name,
         create_if_missing=True,
     )
+    _refresh_snapshot_index(snapshot_store)
     client = OutpostsClient(
         config.api_url,
         token,
@@ -372,9 +435,9 @@ def dispatch_pending_sessions(
     except OutpostsProtocolError:
         logger.exception("Outposts scheduler received an invalid response")
         raise
-    except OutpostsAPIError as error:
-        logger.warning("Outposts scheduler request failed: %s", error)
-        return
+    except OutpostsAPIError:
+        logger.exception("Outposts scheduler request failed")
+        raise
     if not pending:
         return
 
@@ -389,9 +452,13 @@ def dispatch_pending_sessions(
 
     dispatch_failures: list[Exception] = []
     for session_id in pending:
+        if not _reserve_dispatch(snapshot_store, session_id, settings):
+            logger.info("[%s] an invocation is already queued", session_id)
+            continue
         try:
             spawn_session(session_id)
         except Exception as error:
+            snapshot_store.pop(_dispatch_key(session_id), None)
             logger.exception("[%s] dispatch failed", session_id)
             error.add_note(f"while dispatching session {session_id!r}")
             dispatch_failures.append(error)

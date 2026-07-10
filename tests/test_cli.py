@@ -39,6 +39,7 @@ def test_init_generates_an_owned_editable_modal_app(tmp_path, monkeypatch):
     assert "image = worker.prepare_image(base_image)" in source
     assert source.count("@app.function(") == 2
     assert "schedule=modal.Period(" in source
+    assert "max_containers=1" in source
     assert 'name="scheduler",\n    image=controller_image,' in source
     assert "worker.run_session(" in source
     assert "worker.dispatch_pending_sessions(session.spawn)" in source
