@@ -14,7 +14,7 @@ import modal
 from modal_devin._exceptions import ModalCompatibilityError
 
 # Intentionally left unpinned for now. Supply-chain reproducibility is tracked separately.
-_DEVIN_CLI_INSTALL = "curl -fsSL https://cli.devin.ai/install.sh | bash || true"
+_DEVIN_CLI_INSTALL = "curl -fsSL https://cli.devin.ai/install.sh | bash"
 _DEVIN_BIN = "/root/.local/bin/devin"
 
 _CADDYFILE = """\

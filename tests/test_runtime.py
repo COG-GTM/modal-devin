@@ -11,6 +11,7 @@ import pytest
 from modal_devin import (
     ModalCompatibilityError,
     OutpostsAPIError,
+    OutpostsProtocolError,
     SessionStatusUnknownError,
     WorkerExitedError,
 )
@@ -500,13 +501,16 @@ def test_scheduler_does_not_release_an_unclaimed_session_when_spawn_fails(
     monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
     spawn = Mock(side_effect=RuntimeError("no capacity"))
 
-    runtime.dispatch_pending_sessions(
-        config=config,
-        settings=settings,
-        spawn_session=spawn,
-        token="token",
-    )
+    with pytest.raises(ExceptionGroup, match="session dispatches failed") as exc_info:
+        runtime.dispatch_pending_sessions(
+            config=config,
+            settings=settings,
+            spawn_session=spawn,
+            token="token",
+        )
 
+    assert len(exc_info.value.exceptions) == 1
+    assert "devin-1" in "\n".join(exc_info.value.exceptions[0].__notes__)
     assert client.released == []
     assert client.claimed == []
 
@@ -545,6 +549,20 @@ def test_scheduler_request_failure_is_deferred_to_the_next_tick(monkeypatch, con
     spawn.assert_not_called()
 
 
+def test_scheduler_protocol_failure_is_not_hidden(monkeypatch, config, settings):
+    client = PollClient(pending=OutpostsProtocolError("invalid response"))
+    monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
+    monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=Store()))
+
+    with pytest.raises(OutpostsProtocolError, match="invalid response"):
+        runtime.dispatch_pending_sessions(
+            config=config,
+            settings=settings,
+            spawn_session=Mock(),
+            token="token",
+        )
+
+
 def test_scheduler_does_not_claim_until_sidecar_is_ready(monkeypatch, config, settings):
     client = PollClient()
     monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
@@ -555,11 +573,31 @@ def test_scheduler_does_not_claim_until_sidecar_is_ready(monkeypatch, config, se
     )
     monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=Store()))
 
-    runtime.dispatch_pending_sessions(
-        config=config,
-        settings=settings,
-        spawn_session=Mock(),
-        token="token",
-    )
+    with pytest.raises(RuntimeError, match="build unavailable"):
+        runtime.dispatch_pending_sessions(
+            config=config,
+            settings=settings,
+            spawn_session=Mock(),
+            token="token",
+        )
 
     assert client.claimed == []
+
+
+def test_scheduler_attempts_all_dispatches_before_reporting_failures(monkeypatch, config, settings):
+    client = PollClient(pending=("devin-1", "devin-2", "devin-3"))
+    monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
+    store = Store({runtime._SIDECAR_IMAGE_KEY: "im-sidecar"})
+    monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
+    spawn = Mock(side_effect=[RuntimeError("one"), None, RuntimeError("three")])
+
+    with pytest.raises(ExceptionGroup) as exc_info:
+        runtime.dispatch_pending_sessions(
+            config=config,
+            settings=settings,
+            spawn_session=spawn,
+            token="token",
+        )
+
+    assert [call.args[0] for call in spawn.call_args_list] == ["devin-1", "devin-2", "devin-3"]
+    assert len(exc_info.value.exceptions) == 2

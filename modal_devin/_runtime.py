@@ -16,6 +16,7 @@ from modal_devin._config import WorkerConfig, WorkerSettings
 from modal_devin._exceptions import (
     ModalCompatibilityError,
     OutpostsAPIError,
+    OutpostsProtocolError,
     SessionStatusUnknownError,
     WorkerExitedError,
 )
@@ -368,6 +369,9 @@ def dispatch_pending_sessions(
     )
     try:
         pending = client.pending_session_ids(config.pool_id)
+    except OutpostsProtocolError:
+        logger.exception("Outposts scheduler received an invalid response")
+        raise
     except OutpostsAPIError as error:
         logger.warning("Outposts scheduler request failed: %s", error)
         return
@@ -381,10 +385,16 @@ def dispatch_pending_sessions(
             snapshot_store.put(_SIDECAR_IMAGE_KEY, sidecar_image_id)
         except Exception:
             logger.exception("sidecar image build failed before dispatching sessions")
-            return
+            raise
 
+    dispatch_failures: list[Exception] = []
     for session_id in pending:
         try:
             spawn_session(session_id)
-        except Exception:
+        except Exception as error:
             logger.exception("[%s] dispatch failed", session_id)
+            error.add_note(f"while dispatching session {session_id!r}")
+            dispatch_failures.append(error)
+
+    if dispatch_failures:
+        raise ExceptionGroup("one or more session dispatches failed", dispatch_failures)

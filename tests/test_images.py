@@ -10,6 +10,7 @@ import pytest
 from modal_devin import ModalCompatibilityError
 from modal_devin.images import (
     _CADDYFILE,
+    _DEVIN_CLI_INSTALL,
     _SIDECAR_RECIPE_DIGEST,
     _controller_image,
     _create_sidecar,
@@ -30,6 +31,10 @@ def test_worker_image_remains_composable():
 
     assert isinstance(customized, modal.Image)
     assert "local files" not in repr(image)
+
+
+def test_devin_installer_does_not_suppress_failures():
+    assert "|| true" not in _DEVIN_CLI_INSTALL
 
 
 def test_controller_image_is_small_and_contains_the_runtime_source():

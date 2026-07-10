@@ -41,6 +41,10 @@ and uses semantic versioning.
   readiness, snapshot creation, claim release, and cleanup.
 - Package installation is documented as a project dependency rather than an
   isolated tool installation.
+- Scheduler invocations now surface protocol, sidecar-build, and dispatch failures;
+  all pending sessions are still attempted before dispatch errors are reported.
+- Devin CLI installation failures now stop worker image builds at the failing
+  installer step.
 
 ### Removed
 
