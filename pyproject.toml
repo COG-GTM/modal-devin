@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
-    { name = "modal-devin contributors" },
+    { name = "Adam Azzam", email = "33043305+aaazzam@users.noreply.github.com" },
 ]
 keywords = ["devin", "modal", "outposts", "workers"]
 classifiers = [
@@ -19,12 +19,12 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
 dependencies = [
-    "modal>=1.5.1",
+    "modal>=1.5.1,<2",
     "cyclopts>=4.20",
-    "pydantic-settings>=2.0",
     "rich>=13.6",
 ]
 
@@ -32,6 +32,7 @@ dependencies = [
 Repository = "https://github.com/aaazzam/modal-devin"
 Issues = "https://github.com/aaazzam/modal-devin/issues"
 Changelog = "https://github.com/aaazzam/modal-devin/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/aaazzam/modal-devin#readme"
 
 [project.scripts]
 modal-devin = "modal_devin.cli:run"
@@ -45,20 +46,33 @@ packages = ["modal_devin"]
 
 [dependency-groups]
 dev = [
+    "coverage[toml]>=7.10",
     "pytest>=9.1.1",
     "ruff>=0.15.20",
     "ty>=0.0.57",
 ]
 
 [tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers"]
+markers = [
+    "integration: opt-in checks that create ephemeral resources in a Modal workspace",
+]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["modal_devin"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["ANN", "B", "E", "F", "I", "UP"]
+allowed-confusables = ["›"]
+select = ["ANN", "B", "C4", "E", "F", "I", "LOG", "RUF", "SIM", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["ANN"]

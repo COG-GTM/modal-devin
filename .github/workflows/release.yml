@@ -1,0 +1,30 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/modal-devin/
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Verify release tag matches package version
+        run: |
+          version="$(uv run python -c 'import modal_devin; print(modal_devin.__version__)')"
+          test "${GITHUB_REF_NAME#v}" = "$version"
+      - run: uv build
+      - run: uv run --with twine twine check dist/*
+      - run: uv publish --trusted-publishing always dist/*

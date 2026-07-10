@@ -1,30 +1,35 @@
 """Run Devin Outposts workers on Modal."""
 
-from modal_devin.outpost import (
-    DEFAULT_API_URL,
-    POLL_INTERVAL_SECS,
-    SESSION_TIMEOUT_SECS,
-    OutpostPoolConfig,
-    SessionRunner,
-    build_sidecar_image_id,
-    clone_private_repo,
-    poll_and_dispatch,
-    run_session,
-    worker_image,
-)
+from importlib.metadata import PackageNotFoundError, version
 
-__version__ = "0.1.0"
+from modal_devin._config import WorkerSettings
+from modal_devin._exceptions import (
+    ConfigurationError,
+    ModalCompatibilityError,
+    ModalDevinError,
+    OutpostsAPIError,
+    OutpostsProtocolError,
+    SessionStatusUnknownError,
+    WorkerExitedError,
+)
+from modal_devin.images import clone_private_repo
+from modal_devin.worker import Worker
+
+try:
+    __version__ = version("modal-devin")
+except PackageNotFoundError:  # pragma: no cover - source trees without installed metadata
+    __version__ = "0+unknown"
 
 __all__ = [
+    "ConfigurationError",
+    "ModalCompatibilityError",
+    "ModalDevinError",
+    "OutpostsAPIError",
+    "OutpostsProtocolError",
+    "SessionStatusUnknownError",
+    "Worker",
+    "WorkerExitedError",
+    "WorkerSettings",
     "__version__",
-    "DEFAULT_API_URL",
-    "POLL_INTERVAL_SECS",
-    "SESSION_TIMEOUT_SECS",
-    "OutpostPoolConfig",
-    "SessionRunner",
-    "build_sidecar_image_id",
     "clone_private_repo",
-    "poll_and_dispatch",
-    "run_session",
-    "worker_image",
 ]

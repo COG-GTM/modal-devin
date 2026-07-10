@@ -1,29 +1,47 @@
 # Changelog
 
-All notable changes to this project should be documented in this file.
-
-The format follows Keep a Changelog, and this project uses semantic versioning.
+All notable changes are documented here. The project follows Keep a Changelog
+and uses semantic versioning.
 
 ## Unreleased
 
 ### Added
 
-- `OutpostPoolConfig` as the preferred typed configuration object for pool
-  helpers.
-- `modal-devin outpost deploy` and `modal-devin outpost create --deploy` so
-  installed users deploy generated pools from the same Python environment.
-- GitHub Actions CI for tests, linting, type checking, and package builds.
-- Contributing notes for local development and security expectations.
+- `Worker` as an immutable configured runtime with durable image, session, and
+  dispatch operations.
+- Validated `WorkerSettings` with explicit `MODAL_DEVIN_*` environment loading.
+- Typed public exceptions for configuration, compatibility, API, status, and
+  worker-process failures.
+- `modal-devin init`, `deploy`, and `doctor` project-level commands.
+- Modal Dict-backed filesystem snapshot persistence.
 
 ### Changed
 
-- Generated pools use `OutpostPoolConfig` and configure logging with
-  `WORKER_LOG_LEVEL`.
-- Runtime library messages now use the `modal_devin.outpost` logger instead of
-  writing directly to stdout or stderr.
-- Package metadata now declares Python 3.11, 3.12, and 3.13 support.
+- Generated files now own the `modal.App`, secret, image composition, function
+  decorators, schedule, and connection between the scheduler and session function.
+- Session and scheduler bodies are thin adapters into `Worker.run_session()` and
+  `Worker.dispatch_pending_sessions()`.
+- `Worker.run_session()` inherits Modal Sandbox keyword typing through `ParamSpec`
+  while protecting runtime-owned lifecycle options.
+- Deployed functions are named `scheduler` and `session` by operational role.
+- Worker images remain composable between `Worker.base_image()` and the terminal
+  `Worker.prepare_image()` source mount.
+- Final session status failures preserve a recovery snapshot and fail the Modal
+  invocation.
+- Nonzero Devin worker exits now raise `WorkerExitedError`.
+- Package installation is documented as a project dependency rather than an
+  isolated tool installation.
+
+### Removed
+
+- The `Worker.app()` application factory and its Modal function-option mappings.
+- The low-level public `poll_and_dispatch()`, `build_sidecar_image_id()`,
+  `SessionRunner`, and `OutpostPoolConfig` surface.
+- The redundant `modal-devin outpost` command group.
 
 ### Security
 
-- Interactive Modal secret creation now uses a temporary JSON file instead of
-  passing `DEVIN_OUTPOSTS_TOKEN` in subprocess arguments.
+- The sidecar health check is served locally and no longer sends a token-bearing
+  request to the upstream API.
+- The credential-injecting proxy only forwards Outposts API paths.
+- Worker output combines stdout and stderr so failures remain observable.

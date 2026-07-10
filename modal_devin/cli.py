@@ -1,14 +1,13 @@
-"""`modal-devin` cyclopts CLI. Scaffolds a thin pool entrypoint around `modal_devin.outpost`,
-which is mounted into the pool's image at deploy time (see outpost.outpost_pool).
+"""The modal-devin project CLI.
 
-Run with no arguments for a wizard: prompts for whatever's missing instead of failing on a
-missing required argument. Non-interactive (no tty) falls back to erroring on missing input, so
-scripted/CI use is unaffected.
+``modal-devin init`` prompts for missing values on an interactive terminal and
+requires explicit values in scripts and CI.
 """
 
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,25 +15,26 @@ import urllib.error
 import urllib.request
 from collections import deque
 from collections.abc import Sequence
+from importlib.resources import files
 from pathlib import Path
 from string import Template
 from typing import Annotated, TextIO, TypedDict, Unpack, cast
 
 import cyclopts
-from modal.config import config as _modal_config
+import modal
 from rich.console import Console
 from rich.live import Live
+from rich.markup import escape
 from rich.prompt import Confirm, Prompt
 from rich.text import Text
 
-from modal_devin import DEFAULT_API_URL
+from modal_devin import ConfigurationError, Worker
+from modal_devin._config import DEFAULT_API_TIMEOUT_SECONDS, DEFAULT_API_URL
 
 app = cyclopts.App(name="modal-devin")
-outpost = cyclopts.App(name="outpost", help="Manage Outposts pools running on Modal.")
-app.command(outpost)
 
-TEMPLATE_PATH = Path(__file__).parent / "templates" / "pool.py.tmpl"
-DEVIN_TOKEN_URL = "https://docs.devin.ai/api-reference/v3/overview"
+TEMPLATE = files("modal_devin").joinpath("templates", "pool.py.tmpl")
+DEVIN_TOKEN_URL = "https://docs.devin.ai/api-reference/authentication"
 _MODULE_STEM_RE = re.compile(r"[^0-9A-Za-z_]+")
 
 # create-next-app-style prompts: "? Question › answer" instead of Rich's default "Question: ".
@@ -77,7 +77,7 @@ SecretNameOption = Annotated[
     cyclopts.Parameter(help="Modal Secret name containing DEVIN_OUTPOSTS_TOKEN."),
 ]
 PoolsDirOption = Annotated[
-    str,
+    Path,
     cyclopts.Parameter(help="Directory where the generated Modal pool file is written."),
 ]
 DeployOption = Annotated[
@@ -163,10 +163,13 @@ def _interactive() -> bool:
 
 def _modal(*args: str) -> subprocess.CompletedProcess[str]:
     """Run `modal` via the current interpreter rather than a bare `modal` on PATH: `modal` is
-    already a declared dependency of this package, so `-m modal` works inside modal-devin's own
-    environment (repo .venv or the isolated `uv tool install` venv) even when the `modal` console
-    script itself isn't separately exposed on PATH there."""
-    return subprocess.run([sys.executable, "-m", "modal", *args], capture_output=True, text=True)
+    a declared dependency, so this consistently uses the project's selected environment."""
+    return subprocess.run(
+        [sys.executable, "-m", "modal", *args],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
 
 
 def _run_with_tail(argv: Sequence[str], window: int = 10) -> int:
@@ -174,6 +177,7 @@ def _run_with_tail(argv: Sequence[str], window: int = 10) -> int:
     to see it's alive and what it's doing, without flooding the terminal with a full build log.
     The final `window` lines stick around afterward (e.g. modal deploy's own success/URL line)."""
     lines: deque[str] = deque(maxlen=window)
+    all_lines: list[str] = []
     proc = subprocess.Popen(
         argv,
         stdout=subprocess.PIPE,
@@ -182,14 +186,27 @@ def _run_with_tail(argv: Sequence[str], window: int = 10) -> int:
         bufsize=1,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
-    assert proc.stdout is not None
-    with Live(console=_console, refresh_per_second=12, transient=True) as live:
-        for line in proc.stdout:
-            lines.append(line.rstrip())
-            live.update(Text("\n".join(lines), style="dim"))
-    proc.wait()
-    if lines:
-        _console.print(Text("\n".join(lines), style="dim"))
+    if proc.stdout is None:  # pragma: no cover - guaranteed by stdout=PIPE
+        raise RuntimeError("failed to capture subprocess output")
+    try:
+        with Live(console=_console, refresh_per_second=12, transient=True) as live:
+            for line in proc.stdout:
+                rendered = line.rstrip()
+                lines.append(rendered)
+                all_lines.append(rendered)
+                live.update(Text("\n".join(lines), style="dim"))
+        proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        raise
+    visible_lines = all_lines if proc.returncode else list(lines)
+    if visible_lines:
+        _console.print(Text("\n".join(visible_lines), style="dim"))
     return proc.returncode
 
 
@@ -203,7 +220,10 @@ def _modal_deploy(pool_file: Path) -> int:
 def _existing_secret_names() -> set[str] | None:
     """Names of secrets already in the workspace, or None if the check itself failed (not
     logged in, ...) -- callers should fall back to manual instructions."""
-    result = _modal("secret", "list", "--json")
+    try:
+        result = _modal("secret", "list", "--json")
+    except (subprocess.TimeoutExpired, OSError):
+        return None
     if result.returncode != 0:
         return None
     try:
@@ -252,15 +272,18 @@ def _delete_pool(api_url: str, token: str | None, pool_id: str) -> bool:
     req = urllib.request.Request(f"{api_url.rstrip('/')}/outposts/pools/{pool_id}", method="DELETE")
     req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req):
+        with urllib.request.urlopen(req, timeout=DEFAULT_API_TIMEOUT_SECONDS):
             return True
     except urllib.error.URLError:
         return False
 
 
 def _modal_is_configured() -> bool:
-    """Whether a Modal token is available (env vars or ~/.modal.toml) -- no network call."""
-    return bool(_modal_config.get("token_id") and _modal_config.get("token_secret"))
+    """Whether Modal accepts the token available to the current Python environment."""
+    try:
+        return _modal("token", "info").returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
 
 
 def _module_stem(name: str) -> str:
@@ -276,7 +299,7 @@ def _python_literal(value: str) -> str:
     return repr(value)
 
 
-@outpost.command
+@app.command
 def deploy(pool_file: PoolFileArg) -> None:
     """Deploy a generated Modal pool file using modal-devin's Python environment."""
     returncode = _modal_deploy(pool_file)
@@ -284,14 +307,14 @@ def deploy(pool_file: PoolFileArg) -> None:
         raise SystemExit(returncode)
 
 
-@outpost.command
-def create(
+@app.command(name="init")
+def init_worker(
     name: PoolNameArg = "",
     *,
     pool_id: PoolIdOption = "",
     api_url: ApiUrlOption = DEFAULT_API_URL,
     secret_name: SecretNameOption = "devin-outposts-token",
-    pools_dir: PoolsDirOption = "pools",
+    pools_dir: PoolsDirOption = Path("pools"),
     deploy: DeployOption = None,
 ) -> None:
     """Scaffold a Modal pool file for Devin Outposts."""
@@ -307,12 +330,24 @@ def create(
             raise SystemExit("NAME is required (pass it as an argument, or run interactively)")
         name = _ask("What is your pool named?")
 
+    if not secret_name.strip():
+        raise SystemExit("secret_name must not be empty")
+
+    try:
+        validated_worker = Worker(
+            name,
+            pool_id=pool_id or "pending",
+            api_url=api_url,
+        )
+    except ConfigurationError as error:
+        raise SystemExit(str(error)) from error
+
     # Resolve and validate the output path *before* creating anything remotely, so the one
     # foreseeable, locally-checkable failure (name collision) never even reaches the API.
     # Anything that fails after that point (mkdir, template write, ...) rolls the pool back via
     # DELETE /outposts/pools/{pool_id} instead, so `create` doesn't leave a live pool behind with
     # no local file to show for it.
-    out_dir = Path(pools_dir)
+    out_dir = pools_dir
     out_path = out_dir / f"{_module_stem(name)}.py"
     if out_path.exists():
         raise SystemExit(f"{out_path} already exists, not overwriting")
@@ -334,6 +369,7 @@ def create(
                 capture_output=True,
                 text=True,
                 env=env,
+                timeout=120,
             )
         except FileNotFoundError as e:
             _step_failed("devin worker pool create failed")
@@ -341,22 +377,30 @@ def create(
                 "`devin` CLI not found on PATH -- install it with:\n"
                 "  curl -fsSL https://cli.devin.ai/install.sh | bash"
             ) from e
+        except subprocess.TimeoutExpired as error:
+            _step_failed("devin worker pool create timed out")
+            raise SystemExit("Devin pool creation did not finish within 120 seconds") from error
         if result.returncode != 0:
             _step_failed(f"devin worker pool create {name} failed")
             raise SystemExit(result.stderr)
         pool_id = result.stdout.strip()
+        if not pool_id:
+            raise SystemExit("Devin CLI succeeded without returning a pool ID")
         created_pool_id = pool_id
-        _step_done(f"Created pool [bold]{name}[/bold] [dim]→[/dim] [cyan]{pool_id}[/cyan]")
+        _step_done(
+            f"Created pool [bold]{escape(name)}[/bold] [dim]→[/dim] [cyan]{escape(pool_id)}[/cyan]"
+        )
 
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
-        generated = Template(TEMPLATE_PATH.read_text()).substitute(
+        generated = Template(TEMPLATE.read_text(encoding="utf-8")).substitute(
+            app_name=_python_literal(validated_worker.app_name),
             pool_name=_python_literal(name),
             pool_id=_python_literal(pool_id),
             api_url=_python_literal(api_url),
             secret_name=_python_literal(secret_name),
         )
-        out_path.write_text(generated)
+        out_path.write_text(generated, encoding="utf-8")
     except OSError as e:
         if created_pool_id and _delete_pool(api_url, token, created_pool_id):
             raise SystemExit(
@@ -369,12 +413,12 @@ def create(
                 f"delete it from the Devin dashboard or with the Outposts API."
             ) from e
         raise SystemExit(f"Failed to write {out_path}: {e}") from e
-    _done(f"Wrote [cyan]{out_path}[/cyan]")
+    _done(f"Wrote [cyan]{escape(str(out_path))}[/cyan]")
 
     existing_secrets = _existing_secret_names()
     secret_created = False
     if existing_secrets is not None and secret_name in existing_secrets:
-        _done(f"Modal secret [bold]{secret_name}[/bold] already exists")
+        _done(f"Modal secret [bold]{escape(secret_name)}[/bold] already exists")
     elif interactive:
         if not token:
             _console.print(f"[dim]Grab a Devin Service User Key: {DEVIN_TOKEN_URL}[/dim]")
@@ -400,9 +444,14 @@ def create(
             f"[cyan]/path/to/secret.json[/cyan] {secret_name}"
         )
 
-    should_deploy = deploy if deploy is not None else interactive and _confirm(
-        f"Deploy {name} now?",
-        default=True,
+    should_deploy = (
+        deploy
+        if deploy is not None
+        else interactive
+        and _confirm(
+            f"Deploy {name} now?",
+            default=True,
+        )
     )
     if should_deploy:
         _console.print(f"[dim]Running modal deploy {out_path}...[/dim]")
@@ -413,7 +462,47 @@ def create(
             _console.print(f"[bold red]✖[/bold red] modal deploy failed (exit code {returncode})")
             raise SystemExit(returncode)
     else:
-        _console.print(f"[dim]then:[/dim] modal-devin outpost deploy [cyan]{out_path}[/cyan]")
+        _console.print(f"[dim]then:[/dim] modal-devin deploy [cyan]{escape(str(out_path))}[/cyan]")
+
+
+@app.command
+def doctor(
+    *,
+    secret_name: SecretNameOption = "devin-outposts-token",
+) -> None:
+    """Check local Modal, Devin, and worker-runtime prerequisites."""
+    failures = 0
+
+    if hasattr(modal.Sandbox, "_experimental_sidecars"):
+        _done("Installed Modal SDK exposes Sandbox sidecars")
+    else:
+        _step_failed("Installed Modal SDK does not expose Sandbox sidecars")
+        failures += 1
+
+    if _modal_is_configured():
+        _done("Modal credentials are valid")
+    else:
+        _step_failed("Modal credentials are missing or invalid; run `modal setup`")
+        failures += 1
+
+    secrets = _existing_secret_names()
+    if secrets is None:
+        _step_failed("Could not inspect Modal secrets")
+        failures += 1
+    elif secret_name in secrets:
+        _done(f"Modal secret [bold]{escape(secret_name)}[/bold] exists")
+    else:
+        _step_failed(f"Modal secret {escape(secret_name)} does not exist")
+        failures += 1
+
+    devin_path = shutil.which("devin")
+    if devin_path:
+        _done(f"Devin CLI found at [cyan]{escape(devin_path)}[/cyan]")
+    else:
+        _console.print("[yellow]![/yellow] Devin CLI not found (only needed to create new pools)")
+
+    if failures:
+        raise SystemExit(1)
 
 
 def run() -> None:
