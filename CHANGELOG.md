@@ -5,6 +5,8 @@ and uses semantic versioning.
 
 ## Unreleased
 
+## 0.1.2 - 2026-07-16
+
 ### Added
 
 - `modal-devin deploy` deploys every `*.py` file in `--outposts-dir` (default
