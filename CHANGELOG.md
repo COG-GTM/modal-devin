@@ -5,6 +5,24 @@ and uses semantic versioning.
 
 ## Unreleased
 
+### Fixed
+
+- Workers no longer pre-claim a session and then hand it to `devin worker start`,
+  which made the CLI claim the same session a second time with the same acceptor;
+  the beta API's response to that redundant claim isn't one the current `devin`
+  CLI can parse, so the worker exited immediately, released the claim, and the
+  scheduler redispatched it forever. `Worker.run_session` now passes the
+  `connect_token` and `gateway_url` from its own claim to `devin worker start` via
+  `DEVIN_REMOTE_SESSION_TOKEN`/`DEVIN_OUTPOST_GATEWAY_URL`, the documented hand-off
+  for a caller that has already claimed the session, so `devin-cli` runs the
+  remote directly instead of claiming again.
+- The worker's logger never had a handler attached, so every `logger.info()` call
+  (claim/release/snapshot events, and the `devin worker start` subprocess's own
+  stdout) was silently dropped instead of reaching Modal's logs.
+- The sidecar's Caddyfile now enables structured access logging, so a session's
+  HTTP traffic through the sidecar is visible in `modal app logs` alongside the
+  worker's own log lines.
+
 ## 0.1.2 - 2026-07-16
 
 ### Added

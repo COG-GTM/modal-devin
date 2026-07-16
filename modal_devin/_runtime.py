@@ -110,6 +110,11 @@ def _reserve_dispatch(
 def _configure_logging(settings: WorkerSettings) -> None:
     """Apply the worker log level without changing the application's root logger."""
     logger.setLevel(settings.log_level.upper())
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logger.addHandler(handler)
+        logger.propagate = False
 
 
 def _release_safely(client: OutpostsClient, session_id: str, acceptor_id: str, reason: str) -> None:
@@ -258,6 +263,8 @@ def _run_claimed_session(
     client: OutpostsClient,
     snapshot_store: SnapshotStore,
     session_id: str,
+    connect_token: str | None,
+    gateway_url: str | None,
     sidecar_image_id: str,
     sandbox_options: Mapping[str, Any],
 ) -> None:
@@ -287,6 +294,20 @@ def _run_claimed_session(
             timeout_seconds=settings.sidecar_ready_timeout_seconds,
         )
 
+        exec_env = {
+            "DEVIN_API_URL": f"http://caddy:{_SIDECAR_PORT}",
+            "DEVIN_OUTPOSTS_TOKEN": _DUMMY_TOKEN,
+        }
+        if connect_token is not None:
+            # Already claimed via our own client.claim() call above -- handing the resulting
+            # connect_token to devin-cli makes it run the remote directly instead of claiming
+            # the session a second time itself (which the beta API's response shape breaks).
+            exec_env["DEVIN_REMOTE_SESSION_TOKEN"] = connect_token
+            if gateway_url is not None:
+                # devin-cli only learns the gateway URL from the claim response it would have
+                # made itself; since DEVIN_REMOTE_SESSION_TOKEN skips that call, it must be
+                # supplied directly here instead.
+                exec_env["DEVIN_OUTPOST_GATEWAY_URL"] = gateway_url
         process = sandbox.exec(
             _DEVIN_BIN,
             "worker",
@@ -297,10 +318,7 @@ def _run_claimed_session(
             config.outpost_id,
             "--acceptor-id",
             config.acceptor_id,
-            env={
-                "DEVIN_API_URL": f"http://caddy:{_SIDECAR_PORT}",
-                "DEVIN_OUTPOSTS_TOKEN": _DUMMY_TOKEN,
-            },
+            env=exec_env,
             stderr=StreamType.STDOUT,
             timeout=settings.session_timeout_seconds,
         )
@@ -402,6 +420,8 @@ def execute_session(
             client=client,
             snapshot_store=snapshot_store,
             session_id=session_id,
+            connect_token=claim.connect_token,
+            gateway_url=claim.gateway_url,
             sidecar_image_id=sidecar_image_id,
             sandbox_options=sandbox_options,
         )

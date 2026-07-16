@@ -52,6 +52,8 @@ class _HTTPError(OutpostsAPIError):
 @dataclass(frozen=True, slots=True)
 class Claim:
     deadline: str | None
+    connect_token: str | None
+    gateway_url: str | None
 
 
 class SessionStatus(StrEnum):
@@ -174,9 +176,7 @@ class OutpostsClient:
             "/opbeta/outposts",
             {"name": name, "platform": platform, "description": description},
         )
-        return _required_nested_string(
-            response, "metadata", "outpost_id", context="outpost create"
-        )
+        return _required_nested_string(response, "metadata", "outpost_id", context="outpost create")
 
     def delete_outpost(self, outpost_id: str) -> None:
         encoded = urllib.parse.quote(outpost_id, safe="")
@@ -208,7 +208,11 @@ class OutpostsClient:
             if error.status_code == 409:
                 raise ClaimConflict(session_id) from error
             raise OutpostsAPIError(f"claim request for {session_id!r} failed: {error}") from error
-        return Claim(deadline=_nested_string(response, "status", "claim_deadline"))
+        return Claim(
+            deadline=_nested_string(response, "status", "claim_deadline"),
+            connect_token=_nested_string(response, "status", "connect_token"),
+            gateway_url=_nested_string(response, "status", "gateway_url"),
+        )
 
     def release(self, session_id: str, acceptor_id: str) -> None:
         self._request(

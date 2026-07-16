@@ -28,6 +28,10 @@ _CADDYFILE = """\
 }
 
 :{$SIDECAR_PORT} {
+	log {
+		output stdout
+		format json
+	}
 	handle /_modal_devin/health {
 		respond "ok" 200
 	}

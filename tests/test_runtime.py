@@ -86,7 +86,7 @@ class Client:
         self.claims.append((session_id, acceptor_id))
         if self.claim_error:
             raise self.claim_error
-        return Claim("tomorrow")
+        return Claim("tomorrow", "connect-token", "wss://gateway.example")
 
     def session_status(self, session_id, acceptor_id):
         if self.status_errors:
@@ -123,6 +123,8 @@ def run_claimed(monkeypatch, *, config, settings, client, store, sandbox):
         client=client,
         snapshot_store=store,
         session_id="devin-1",
+        connect_token="connect-token",
+        gateway_url="wss://gateway.example",
         sidecar_image_id="im-sidecar",
         sandbox_options={},
     )
@@ -476,6 +478,8 @@ def test_missing_cached_sidecar_is_evicted_for_the_next_scheduler(monkeypatch, c
             client=cast(OutpostsClient, Client()),
             snapshot_store=store,
             session_id="devin-1",
+            connect_token="connect-token",
+            gateway_url="wss://gateway.example",
             sidecar_image_id="im-deleted",
             sandbox_options={},
         )
@@ -500,7 +504,7 @@ class PollClient:
         if self.claim_error:
             raise self.claim_error
         self.claimed.append((session_id, acceptor_id))
-        return Claim("tomorrow")
+        return Claim("tomorrow", "connect-token", "wss://gateway.example")
 
     def release(self, session_id, acceptor_id):
         self.released.append((session_id, acceptor_id))
