@@ -50,11 +50,20 @@ The selected credential must be authorized for the corresponding outpost.
 ## Customize independently
 
 Each application can use different repositories, tools, compute, regions, schedules,
-retention, credentials, and Modal tags. Edit and deploy each generated file normally.
+retention, credentials, and Modal tags. Edit and deploy each generated file normally,
+either one at a time:
 
 ```bash
 uv run modal-devin deploy outposts/frontend.py
 uv run modal-devin deploy outposts/backend.py
+```
+
+or all at once by omitting the file. `deploy` then deploys every `*.py` file in
+`--outposts-dir` (`outposts/` by default), continuing past a failed deployment and
+reporting every outpost that failed at the end:
+
+```bash
+uv run modal-devin deploy
 ```
 
 ## Use unique names

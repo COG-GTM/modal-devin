@@ -5,6 +5,15 @@ and uses semantic versioning.
 
 ## Unreleased
 
+### Added
+
+- `modal-devin deploy` deploys every `*.py` file in `--outposts-dir` (default
+  `outposts/`) when `OUTPOST-FILE` is omitted, continuing past a failed deployment
+  and reporting every outpost that failed to deploy at the end.
+- `modal-devin doctor` now checks that every outpost file in `--outposts-dir` has a
+  matching deployed Modal app, reading each file's `Worker.from_env(...)` call to
+  determine its expected app name without executing the file.
+
 ## 0.1.1 - 2026-07-16
 
 ### Changed

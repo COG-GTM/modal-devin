@@ -117,28 +117,48 @@ uv run modal-devin init my-outpost \
 ## `modal-devin deploy`
 
 ```text
-modal-devin deploy OUTPOST-FILE
+modal-devin deploy [OUTPOST-FILE] [--outposts-dir DIR]
 ```
 
-<ParamField path="OUTPOST-FILE" type="path" required>
-  Generated or handwritten Modal outpost application to deploy.
+<ParamField path="OUTPOST-FILE" type="path">
+  Generated or handwritten Modal outpost application to deploy. Omit it to deploy
+  every `*.py` file found directly in `--outposts-dir` instead.
+</ParamField>
+
+<ParamField path="--outposts-dir" type="path" default="outposts">
+  Directory to scan for outpost files when `OUTPOST-FILE` is omitted.
 </ParamField>
 
 The command deploys the selected application with the same project environment that
 runs `modal-devin`. A failed Modal deployment produces a nonzero exit status.
 
+When deploying a single file:
+
 ```bash
 uv run modal-devin deploy outposts/my_outpost.py
+```
+
+When deploying every outpost in a directory, each file is deployed in turn even if an
+earlier one fails; the command exits nonzero afterward listing every outpost that
+failed:
+
+```bash
+uv run modal-devin deploy
+uv run modal-devin deploy --outposts-dir deployments
 ```
 
 ## `modal-devin doctor`
 
 ```text
-modal-devin doctor [--secret-name NAME]
+modal-devin doctor [--secret-name NAME] [--outposts-dir DIR]
 ```
 
 <ParamField path="--secret-name" type="string" default="devin-outposts-token">
   Modal Secret name to verify.
+</ParamField>
+
+<ParamField path="--outposts-dir" type="path" default="outposts">
+  Directory to scan for outpost files to check for a matching deployed Modal app.
 </ParamField>
 
 The command checks:
@@ -149,6 +169,12 @@ The command checks:
 | Local Modal token is valid | Exit status 1 |
 | Modal secrets can be listed | Exit status 1 |
 | Named Modal Secret exists | Exit status 1 |
+| Each outpost file in `--outposts-dir` has a matching deployed Modal app | Exit status 1 |
+
+The last check reads each outpost file's `Worker.from_env(...)` call to determine its
+expected Modal app name, without executing the file, and looks it up with
+`modal.App.lookup`. Files whose app name can't be determined statically (for example,
+heavily hand-edited files) print a warning instead of failing.
 
 `doctor` doesn't check for a local Devin CLI: `init` creates outposts with a direct
 Devin Outposts API call, and the Devin CLI itself is only needed inside the deployed

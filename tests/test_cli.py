@@ -171,21 +171,117 @@ def test_deploy_propagates_modal_exit_code(monkeypatch):
     assert exc_info.value.code == 23
 
 
-def test_doctor_reports_failed_required_check(monkeypatch):
+def test_deploy_without_a_file_deploys_every_outpost_in_the_directory(tmp_path, monkeypatch):
+    (tmp_path / "a.py").write_text("")
+    (tmp_path / "b.py").write_text("")
+    deployed = []
+    monkeypatch.setattr(cli, "_modal_deploy", lambda path: deployed.append(path) or 0)
+
+    cli.deploy(outposts_dir=tmp_path)
+
+    assert deployed == sorted(tmp_path.glob("*.py"))
+
+
+def test_deploy_without_a_file_reports_which_outposts_failed(tmp_path, monkeypatch):
+    (tmp_path / "a.py").write_text("")
+    (tmp_path / "b.py").write_text("")
+    (tmp_path / "c.py").write_text("")
+    attempted = []
+
+    def fake_deploy(path):
+        attempted.append(path)
+        return 0 if path.name != "b.py" else 1
+
+    monkeypatch.setattr(cli, "_modal_deploy", fake_deploy)
+
+    with pytest.raises(SystemExit, match=r"1 of 3 outpost\(s\) failed to deploy.*b\.py"):
+        cli.deploy(outposts_dir=tmp_path)
+
+    assert attempted == sorted(tmp_path.glob("*.py"))
+
+
+def test_deploy_without_a_file_or_outposts_reports_nothing_to_deploy(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "_modal_deploy",
+        lambda path: (_ for _ in ()).throw(AssertionError("nothing to deploy")),
+    )
+
+    with pytest.raises(SystemExit, match="No outpost files found"):
+        cli.deploy(outposts_dir=tmp_path)
+
+
+def test_doctor_reports_failed_required_check(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_modal_is_configured", lambda: False)
     monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
 
     with pytest.raises(SystemExit) as exc_info:
-        cli.doctor()
+        cli.doctor(outposts_dir=tmp_path)
 
     assert exc_info.value.code == 1
 
 
-def test_doctor_success_path(monkeypatch):
+def test_doctor_success_path(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_modal_is_configured", lambda: True)
     monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
 
-    cli.doctor()
+    cli.doctor(outposts_dir=tmp_path)
+
+
+def test_expected_app_name_reads_the_generated_worker_from_env_call(tmp_path, monkeypatch):
+    generated = initialize(tmp_path, monkeypatch)
+
+    assert cli._expected_app_name(generated) == "modal-devin-demo-pool"
+
+
+def test_expected_app_name_is_none_for_unrecognizable_files(tmp_path):
+    unrecognizable = tmp_path / "custom.py"
+    unrecognizable.write_text("print('not a generated outpost file')")
+
+    assert cli._expected_app_name(unrecognizable) is None
+
+
+def test_doctor_passes_when_every_outpost_has_a_deployed_app(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_interactive", lambda: False)
+    monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
+    initialize(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "_modal_is_configured", lambda: True)
+
+    monkeypatch.setattr(cli.modal, "App", SimpleNamespace(lookup=Mock(return_value=None)))
+
+    cli.doctor(outposts_dir=tmp_path)
+
+
+def test_doctor_fails_when_an_outpost_has_no_deployed_app(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_interactive", lambda: False)
+    monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
+    initialize(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "_modal_is_configured", lambda: True)
+
+    def lookup(name, *, create_if_missing):
+        raise cli.modal.exception.NotFoundError(f"app {name} not found")
+
+    monkeypatch.setattr(cli.modal, "App", SimpleNamespace(lookup=lookup))
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.doctor(outposts_dir=tmp_path)
+
+    assert exc_info.value.code == 1
+
+
+def test_doctor_warns_without_failing_on_an_unrecognizable_outpost_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_modal_is_configured", lambda: True)
+    monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
+    (tmp_path / "custom.py").write_text("print('not a generated outpost file')")
+    monkeypatch.setattr(
+        cli.modal,
+        "App",
+        SimpleNamespace(
+            lookup=lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not be looked up"))
+        ),
+    )
+
+    cli.doctor(outposts_dir=tmp_path)
 
 
 def test_secret_listing_uses_the_sdk(monkeypatch):

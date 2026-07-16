@@ -4,6 +4,7 @@
 requires explicit values in scripts and CI.
 """
 
+import ast
 import os
 import re
 import subprocess
@@ -25,7 +26,7 @@ from rich.text import Text
 
 from modal_devin import ConfigurationError, OutpostsAPIError, Worker
 from modal_devin._client import OutpostsClient
-from modal_devin._config import DEFAULT_API_TIMEOUT_SECONDS, DEFAULT_API_URL
+from modal_devin._config import DEFAULT_API_TIMEOUT_SECONDS, DEFAULT_API_URL, WorkerConfig
 
 app = cyclopts.App(name="modal-devin")
 
@@ -62,7 +63,11 @@ OutpostIdOption = Annotated[
 ]
 OutpostFileArg = Annotated[
     Path,
-    cyclopts.Parameter(help="Generated Modal outpost file to deploy."),
+    cyclopts.Parameter(
+        help="Generated Modal outpost file to deploy. Omit to deploy every outpost "
+        "file in --outposts-dir.",
+        show_default=False,
+    ),
 ]
 ApiUrlOption = Annotated[
     str,
@@ -74,7 +79,7 @@ SecretNameOption = Annotated[
 ]
 OutpostsDirOption = Annotated[
     Path,
-    cyclopts.Parameter(help="Directory where the generated Modal outpost file is written."),
+    cyclopts.Parameter(help="Directory of generated Modal outpost files."),
 ]
 DeployOption = Annotated[
     bool | None,
@@ -266,12 +271,72 @@ def _python_literal(value: str) -> str:
     return repr(value)
 
 
+def _expected_app_name(file: Path) -> str | None:
+    """The Modal app name a generated outpost file declares, without executing it.
+
+    Returns None for files whose `Worker.from_env(...)` call (or its name argument)
+    isn't statically recognizable -- e.g. heavily hand-edited files -- rather than
+    running arbitrary local code just to check on it.
+    """
+    try:
+        tree = ast.parse(file.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return None
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "from_env"
+            and node.args
+        ):
+            continue
+        try:
+            name = ast.literal_eval(node.args[0])
+        except ValueError:
+            return None
+        if not isinstance(name, str):
+            return None
+        try:
+            return WorkerConfig(name=name, outpost_id="doctor", api_url=DEFAULT_API_URL).app_name
+        except ConfigurationError:
+            return None
+    return None
+
+
 @app.command
-def deploy(outpost_file: OutpostFileArg) -> None:
+def deploy(
+    outpost_file: OutpostFileArg | None = None,
+    *,
+    outposts_dir: OutpostsDirOption = Path("outposts"),
+) -> None:
     """Deploy a generated Modal application using modal-devin's Python environment."""
-    returncode = _modal_deploy(outpost_file)
-    if returncode != 0:
-        raise SystemExit(returncode)
+    if outpost_file is not None:
+        returncode = _modal_deploy(outpost_file)
+        if returncode != 0:
+            raise SystemExit(returncode)
+        return
+
+    outpost_files = sorted(outposts_dir.glob("*.py"))
+    if not outpost_files:
+        raise SystemExit(f"No outpost files found in {outposts_dir}")
+
+    failed: list[Path] = []
+    for file in outpost_files:
+        _console.print(f"[dim]Running modal deploy {file}...[/dim]")
+        returncode = _modal_deploy(file)
+        if returncode == 0:
+            _console.print(f"[bold green]✔[/bold green] Deployed [bold]{escape(str(file))}[/bold]")
+        else:
+            _console.print(
+                f"[bold red]✖[/bold red] {escape(str(file))} failed (exit code {returncode})"
+            )
+            failed.append(file)
+
+    if failed:
+        joined = ", ".join(str(file) for file in failed)
+        raise SystemExit(
+            f"{len(failed)} of {len(outpost_files)} outpost(s) failed to deploy: {joined}"
+        )
 
 
 @app.command(name="init")
@@ -425,6 +490,7 @@ def init_worker(
 def doctor(
     *,
     secret_name: SecretNameOption = "devin-outposts-token",
+    outposts_dir: OutpostsDirOption = Path("outposts"),
 ) -> None:
     """Check local Modal and worker-runtime prerequisites."""
     failures = 0
@@ -450,6 +516,22 @@ def doctor(
     else:
         _step_failed(f"Modal secret {escape(secret_name)} does not exist")
         failures += 1
+
+    for outpost_file in sorted(outposts_dir.glob("*.py")):
+        app_name = _expected_app_name(outpost_file)
+        if app_name is None:
+            _console.print(
+                f"[yellow]![/yellow] Could not determine the Modal app for "
+                f"{escape(str(outpost_file))}"
+            )
+            continue
+        try:
+            modal.App.lookup(app_name, create_if_missing=False)
+        except modal.exception.NotFoundError:
+            _step_failed(f"{escape(str(outpost_file))} has no deployed Modal app ({app_name})")
+            failures += 1
+        else:
+            _done(f"{escape(str(outpost_file))} is deployed as [bold]{escape(app_name)}[/bold]")
 
     if failures:
         raise SystemExit(1)

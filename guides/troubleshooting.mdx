@@ -49,8 +49,9 @@ uv run modal-devin doctor
 
 1. Confirm the session was assigned to the same outpost ID as the generated
    application.
-2. Confirm the Modal application is deployed and its scheduled function is active.
-3. Run `modal-devin doctor` with the Secret name used by the application.
+2. Run `modal-devin doctor` with the Secret name used by the application; it checks
+   that every outpost file in `--outposts-dir` has a matching deployed Modal app.
+3. Confirm the deployed application's scheduled function is active.
 4. Inspect the scheduler logs for an authentication, API, image-build, or dispatch
    error.
 5. Allow extra time for the first session while required images build.
