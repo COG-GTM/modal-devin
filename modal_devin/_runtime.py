@@ -294,7 +294,7 @@ def _run_claimed_session(
             timeout_seconds=settings.sidecar_ready_timeout_seconds,
         )
 
-        exec_env = {
+        exec_env: dict[str, str | None] = {
             "DEVIN_API_URL": f"http://caddy:{_SIDECAR_PORT}",
             "DEVIN_OUTPOSTS_TOKEN": _DUMMY_TOKEN,
         }

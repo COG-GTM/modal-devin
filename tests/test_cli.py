@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import runpy
+import sys
 import urllib.error
 from email.message import Message
 from pathlib import Path
@@ -160,6 +161,35 @@ def test_init_can_deploy_from_the_project_environment(tmp_path, monkeypatch):
     generated = initialize(tmp_path, monkeypatch, deploy=True)
 
     assert deployed == [generated]
+
+
+@pytest.mark.parametrize("interactive", [False, True])
+def test_modal_deploy_always_uses_a_rolling_strategy(tmp_path, monkeypatch, interactive):
+    outpost_file = tmp_path / "worker.py"
+    expected = [
+        sys.executable,
+        "-m",
+        "modal",
+        "deploy",
+        "--strategy",
+        "rolling",
+        str(outpost_file),
+    ]
+    monkeypatch.setattr(cli, "_interactive", lambda: interactive)
+
+    if interactive:
+        run_with_tail = Mock(return_value=0)
+        monkeypatch.setattr(cli, "_run_with_tail", run_with_tail)
+    else:
+        run = Mock(return_value=SimpleNamespace(returncode=0))
+        monkeypatch.setattr(cli.subprocess, "run", run)
+
+    assert cli._modal_deploy(outpost_file) == 0
+
+    if interactive:
+        run_with_tail.assert_called_once_with(expected)
+    else:
+        run.assert_called_once_with(expected)
 
 
 def test_deploy_propagates_modal_exit_code(monkeypatch):

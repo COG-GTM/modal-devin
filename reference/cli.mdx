@@ -120,6 +120,9 @@ uv run modal-devin init my-outpost \
 modal-devin deploy [OUTPOST-FILE] [--outposts-dir DIR]
 ```
 
+Deployments always use Modal's `rolling` strategy so active session invocations drain
+on their existing application version instead of being terminated by the update.
+
 <ParamField path="OUTPOST-FILE" type="path">
   Generated or handwritten Modal outpost application to deploy. Omit it to deploy
   every `*.py` file found directly in `--outposts-dir` instead.

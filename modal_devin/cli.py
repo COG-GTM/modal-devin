@@ -83,7 +83,10 @@ OutpostsDirOption = Annotated[
 ]
 DeployOption = Annotated[
     bool | None,
-    cyclopts.Parameter(help="Deploy the generated outpost file after writing it.", show_default=False),
+    cyclopts.Parameter(
+        help="Deploy the generated outpost file after writing it.",
+        show_default=False,
+    ),
 ]
 
 
@@ -212,7 +215,21 @@ def _run_with_tail(argv: Sequence[str], window: int = 10) -> int:
 
 
 def _modal_deploy(outpost_file: Path) -> int:
-    argv = [sys.executable, "-m", "modal", "deploy", str(outpost_file)]
+    # Session invocations are long-lived: a rolling deployment lets the old
+    # Function version finish serving every input it already owns while the new
+    # scheduler version begins dispatching work.  Spell the strategy out instead
+    # of inheriting the Modal CLI default so a dependency upgrade or local CLI
+    # configuration cannot silently turn a code deployment into a disruptive
+    # recreate deployment.
+    argv = [
+        sys.executable,
+        "-m",
+        "modal",
+        "deploy",
+        "--strategy",
+        "rolling",
+        str(outpost_file),
+    ]
     if _interactive():
         return _run_with_tail(argv)
     return subprocess.run(argv).returncode
@@ -385,7 +402,8 @@ def init_worker(
         raise SystemExit(f"{out_path} already exists, not overwriting")
 
     token = None  # the Devin Service User Key (env var DEVIN_OUTPOSTS_TOKEN), if we get one
-    created_outpost_id = None  # set once we register a *new* outpost -- rolled back if a later step fails
+    # Set once we register a *new* outpost; rolled back if a later step fails.
+    created_outpost_id = None
 
     if not outpost_id:
         token = os.environ.get("DEVIN_OUTPOSTS_TOKEN")

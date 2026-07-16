@@ -5,6 +5,21 @@ and uses semantic versioning.
 
 ## Unreleased
 
+## 0.1.4 - 2026-07-16
+
+### Fixed
+
+- `modal-devin deploy` now explicitly selects Modal's rolling deployment strategy,
+  preserving active session invocations while a new application version takes over.
+
+### Changed
+
+- The generated scheduler's default poll interval (`scheduler_interval_seconds` /
+  `MODAL_DEVIN_SCHEDULER_INTERVAL_SECONDS`) is now 3 seconds instead of 30, so
+  queued sessions are picked up much sooner. This means roughly 10x more scheduler
+  invocations per outpost by default; override it back up if invocation volume
+  matters more than pickup latency for your deployment.
+
 ## 0.1.3 - 2026-07-16
 
 ### Fixed
