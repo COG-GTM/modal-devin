@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import json
 import runpy
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -92,22 +93,25 @@ def test_generated_app_does_not_build_sidecar_at_import(tmp_path, monkeypatch):
     runpy.run_path(str(generated))
 
 
-def test_create_modal_secret_uses_a_temp_json_file_not_argv(monkeypatch):
-    seen_paths: list[Path] = []
-
-    def fake_modal(*args: str):
-        assert args[0:3] == ("secret", "create", "--from-json")
-        assert not any("super-secret-token" in arg for arg in args)
-        secret_path = Path(args[3])
-        seen_paths.append(secret_path)
-        assert json.loads(secret_path.read_text()) == {"DEVIN_OUTPOSTS_TOKEN": "super-secret-token"}
-        return subprocess.CompletedProcess(args, 0, "", "")
-
-    monkeypatch.setattr(cli, "_modal", fake_modal)
+def test_create_modal_secret_uses_the_sdk_without_a_subprocess(monkeypatch):
+    create = Mock()
+    monkeypatch.setattr(
+        cli.modal,
+        "Secret",
+        SimpleNamespace(objects=SimpleNamespace(create=create)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_modal",
+        lambda *args: (_ for _ in ()).throw(AssertionError("secret subprocess")),
+    )
 
     cli._create_modal_secret("devin-outposts-token", "super-secret-token")
 
-    assert seen_paths and not seen_paths[0].exists()
+    create.assert_called_once_with(
+        "devin-outposts-token",
+        {"DEVIN_OUTPOSTS_TOKEN": "super-secret-token"},
+    )
 
 
 def test_init_can_deploy_from_the_project_environment(tmp_path, monkeypatch):
@@ -147,22 +151,24 @@ def test_doctor_success_path(monkeypatch):
     cli.doctor()
 
 
-def test_secret_listing_validates_modal_json(monkeypatch):
-    result = subprocess.CompletedProcess(
-        (),
-        0,
-        json.dumps([{"name": "one"}, {"name": "two"}, {"bad": "item"}]),
-        "",
+def test_secret_listing_uses_the_sdk(monkeypatch):
+    list_secrets = Mock(
+        return_value=[
+            SimpleNamespace(name="one"),
+            SimpleNamespace(name="two"),
+            SimpleNamespace(name=None),
+        ]
     )
-    monkeypatch.setattr(cli, "_modal", lambda *args: result)
+    monkeypatch.setattr(
+        cli.modal,
+        "Secret",
+        SimpleNamespace(objects=SimpleNamespace(list=list_secrets)),
+    )
 
     assert cli._existing_secret_names() == {"one", "two"}
+    list_secrets.assert_called_once_with()
 
-    monkeypatch.setattr(
-        cli,
-        "_modal",
-        lambda *args: subprocess.CompletedProcess((), 0, "not-json", ""),
-    )
+    list_secrets.side_effect = RuntimeError("offline")
     assert cli._existing_secret_names() is None
 
 
@@ -222,6 +228,31 @@ def test_init_reports_devin_pool_creation_timeout(tmp_path, monkeypatch):
 
     with pytest.raises(SystemExit, match="120 seconds"):
         cli.init_worker(name="demo", pools_dir=tmp_path)
+
+
+def test_pool_creation_keeps_the_token_out_of_process_arguments(tmp_path, monkeypatch):
+    token = "super-secret-token"
+    monkeypatch.setattr(cli, "_interactive", lambda: False)
+    monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
+    monkeypatch.setenv("DEVIN_OUTPOSTS_TOKEN", token)
+
+    def run(args, **kwargs):
+        assert args == [
+            "devin",
+            "worker",
+            "pool",
+            "create",
+            "demo",
+            "--api-url",
+            "https://api.beta.devinenterprise.com",
+        ]
+        assert all(token not in arg for arg in args)
+        assert kwargs["env"]["DEVIN_OUTPOSTS_TOKEN"] == token
+        return subprocess.CompletedProcess(args, 0, "outpost_env-demo\n", "")
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
+
+    cli.init_worker(name="demo", pools_dir=tmp_path)
 
 
 def test_cli_help_presents_the_project_level_workflow(capsys):

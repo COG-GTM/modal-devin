@@ -1,0 +1,87 @@
+---
+title: Configure runtime behavior
+description: Change polling, session duration, snapshot retention, and logging.
+icon: sliders
+---
+
+The generated application calls `Worker.from_env()`, so you can set runtime policy
+with `MODAL_DEVIN_*` environment variables through your preferred Modal configuration
+mechanism.
+
+## Common settings
+
+| Goal | Environment variable | Default |
+| --- | --- | ---: |
+| Check the pool more or less often | `MODAL_DEVIN_SCHEDULER_INTERVAL_SECONDS` | `30` |
+| Allow longer or shorter sessions | `MODAL_DEVIN_SESSION_TIMEOUT_SECONDS` | `1800` |
+| Change resumable-workspace retention | `MODAL_DEVIN_SNAPSHOT_TTL_SECONDS` | `2592000` |
+| Increase log detail | `MODAL_DEVIN_LOG_LEVEL` | `INFO` |
+
+For example:
+
+```text
+MODAL_DEVIN_SCHEDULER_INTERVAL_SECONDS=60
+MODAL_DEVIN_SESSION_TIMEOUT_SECONDS=3600
+MODAL_DEVIN_SNAPSHOT_TTL_SECONDS=none
+MODAL_DEVIN_LOG_LEVEL=DEBUG
+```
+
+`none` and `null`, in any letter case, both mean indefinite snapshot retention.
+
+## Configure in Python
+
+Use `WorkerSettings` when configuration belongs in version control:
+
+```python
+from modal_devin import Worker, WorkerSettings
+
+settings = WorkerSettings(
+    scheduler_interval_seconds=60,
+    session_timeout_seconds=3600,
+    snapshot_ttl_seconds=None,
+    log_level="INFO",
+)
+
+worker = Worker(
+    "my-pool",
+    pool_id="outpost_env-...",
+    settings=settings,
+)
+```
+
+Use the constructor directly when settings are explicit in code, as above. Use
+`Worker.from_env()` instead when settings should come from `MODAL_DEVIN_*`
+environment variables; it has no `settings` parameter, so the two approaches apply to
+separate `Worker` instances rather than combining on one.
+
+## Preserve the generated timeout
+
+Keep the session function decorator tied to the generated property:
+
+```python
+@app.function(
+    timeout=worker.session_function_timeout_seconds,
+    ...
+)
+```
+
+The property leaves enough time for startup, recovery, and cleanup when the session
+duration changes.
+
+## Choose snapshot retention
+
+Modal's [Sandbox snapshot guide](https://modal.com/docs/guide/sandbox-snapshots)
+documents filesystem snapshot retention and expiration behavior.
+
+- Use the default 30 days for bounded recovery storage.
+- Set a positive number of seconds for another finite duration.
+- Use `None` in Python or `none` in the environment for indefinite retention.
+
+Keep the deployment active while relying on resumability, and remove persistent
+resources when a pool is retired.
+
+<Note>
+  Additional readiness, API, retry, and snapshot timing controls exist for unusual
+  deployments and support-guided troubleshooting. See the
+  [settings reference](/reference/settings) before changing them.
+</Note>

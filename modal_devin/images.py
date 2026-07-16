@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-import re
 import shlex
-import urllib.parse
 from collections.abc import Collection
 from typing import Protocol, cast
 
@@ -57,7 +55,6 @@ _SIDECAR_RECIPE_DIGEST = hashlib.sha256(
 _DUMMY_TOKEN = "cog_sidecarmanaged00000000000000000000000000000000"
 _SIDECAR_PORT = 8686
 _CHROME_PATH = "/usr/bin/chromium"
-_SHELL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class _SidecarManager(Protocol):
@@ -107,59 +104,6 @@ def _controller_image(*, python_version: str = "3.12") -> modal.Image:
 def _finalize_worker_image(image: modal.Image) -> modal.Image:
     """Add modal-devin source as the final, startup-mounted image operation."""
     return image.add_local_python_source("modal_devin")
-
-
-def clone_private_repo(
-    image: modal.Image,
-    repo_url: str,
-    dest: str,
-    *,
-    token_secret: modal.Secret,
-    token_env_var: str = "GIT_CLONE_TOKEN",
-) -> modal.Image:
-    """Clone a private repository without persisting its token in the image."""
-    if not _SHELL_IDENTIFIER.fullmatch(token_env_var):
-        raise ValueError(f"token_env_var must be a valid shell identifier, got: {token_env_var!r}")
-    parsed = urllib.parse.urlsplit(repo_url)
-    if parsed.scheme != "https" or not parsed.netloc or not parsed.path:
-        raise ValueError(f"repo_url must be a full https:// URL, got: {repo_url!r}")
-    if parsed.username or parsed.password:
-        raise ValueError("repo_url must not include credentials")
-    if parsed.query:
-        raise ValueError("repo_url must not include a query string")
-    if parsed.fragment:
-        raise ValueError("repo_url must not include a URL fragment")
-
-    plain_repo_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-    secret_desc = token_secret.name or "<secret>"
-    fail_msg = (
-        f"{token_env_var} is empty -- does secret {secret_desc} have a key named {token_env_var}?"
-    )
-    askpass_script = f"""\
-#!/bin/sh
-case "$1" in
-    *Username*) printf '%s\\n' 'x-access-token' ;;
-    *) printf '%s\\n' "${{{token_env_var}}}" ;;
-esac
-"""
-    return image.run_commands(
-        "\n".join(
-            [
-                "set -eu",
-                f'test -n "${{{token_env_var}:-}}" '
-                f"|| {{ echo {shlex.quote(fail_msg)} >&2; exit 1; }}",
-                "askpass=$(mktemp /tmp/modal-devin-askpass.XXXXXX)",
-                "trap 'rm -f \"$askpass\"' EXIT",
-                f"cat > \"$askpass\" <<'MODAL_DEVIN_ASKPASS'\n{askpass_script}MODAL_DEVIN_ASKPASS",
-                'chmod 700 "$askpass"',
-                "GIT_TERMINAL_PROMPT=0 "
-                'GIT_ASKPASS="$askpass" '
-                f"git clone {shlex.quote(plain_repo_url)} {shlex.quote(dest)}",
-                f"git -C {shlex.quote(dest)} remote set-url origin {shlex.quote(plain_repo_url)}",
-            ]
-        ),
-        secrets=[token_secret],
-    )
 
 
 def _sidecar_image() -> modal.Image:
@@ -213,6 +157,3 @@ def _create_sidecar(
         env={"SIDECAR_PORT": str(_SIDECAR_PORT), "UPSTREAM_URL": api_url},
         secrets=[modal.Secret.from_dict({"DEVIN_OUTPOSTS_TOKEN": token})],
     )
-
-
-__all__ = ["clone_private_repo"]

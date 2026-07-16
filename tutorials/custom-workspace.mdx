@@ -1,0 +1,90 @@
+---
+title: Build a project workspace
+description: Add project code and tools to every new Devin session.
+icon: folder-code
+---
+
+The generated application includes an image block for the workspace Devin sees in a
+new session. Customize that block with the normal
+[`modal.Image` API](https://modal.com/docs/guide/images).
+
+## Before you begin
+
+You need a deployed `modal-devin` application from
+[Deploy your first worker](/tutorials/first-worker) or
+[Create a pool interactively](/tutorials/create-a-pool).
+
+<Steps>
+  <Step title="Open the generated pool file">
+    Find this block in `pools/my_pool.py`:
+
+    ```python
+    base_image = (
+        worker.base_image()
+        # Add every application-specific build step here.
+    )
+
+    image = worker.prepare_image(base_image)
+    ```
+  </Step>
+
+  <Step title="Install workspace tools">
+    Add packages before `prepare_image()`:
+
+    ```python
+    base_image = (
+        worker.base_image()
+        .apt_install("ripgrep", "jq")
+        .pip_install("pytest", "ruff")
+    )
+    image = worker.prepare_image(base_image)
+    ```
+  </Step>
+
+  <Step title="Add a repository">
+    The default workspace is `/root/workspace`:
+
+    ```python
+    base_image = (
+        worker.base_image()
+        .run_commands(
+            "git clone https://github.com/your-org/app /root/workspace/app"
+        )
+    )
+    image = worker.prepare_image(base_image)
+    ```
+  </Step>
+
+  <Step title="Deploy the workspace">
+    ```bash
+    uv run modal-devin deploy pools/my_pool.py
+    ```
+
+    New sessions use the new image. A resumed session continues from its preserved
+    filesystem instead of merging in later image changes.
+  </Step>
+</Steps>
+
+<Warning>
+  Keep every image build operation before `prepare_image()`. Do not change the
+  generated image wiring elsewhere in the application.
+</Warning>
+
+## Optional tools
+
+Chrome and FFmpeg are included by default. Disable either when the workload does not
+need it:
+
+```python
+base_image = worker.base_image(
+    install_chrome=False,
+    install_ffmpeg=False,
+)
+```
+
+See the [image reference](/reference/images) for everything else the standard image
+includes.
+
+<Card title="Image customization recipes" icon="layer-group" href="/guides/customize-image" horizontal>
+  Explore packages, environment variables, repositories, and build ordering.
+</Card>

@@ -1,0 +1,55 @@
+---
+title: Resumability
+description: How suspended sessions preserve work and what happens after a redeploy.
+icon: clock-rotate-left
+---
+
+When a Devin session suspends, `modal-devin` preserves its Sandbox filesystem with a
+[Modal filesystem snapshot](https://modal.com/docs/guide/sandbox-snapshots). A later
+attempt can continue with project files, installed tools, and other filesystem changes
+from the captured workspace.
+
+## Which workspace a session uses
+
+| Situation | Starting filesystem |
+| --- | --- |
+| New session | Latest deployed worker image |
+| Suspended session with a usable snapshot | Preserved session filesystem |
+| Suspended session whose snapshot expired | Latest deployed worker image |
+| Terminal session | No workspace is retained for another attempt |
+
+## Redeploying an image
+
+A preserved filesystem is a complete session workspace. New packages or repository
+changes in a later base image are not merged into it automatically.
+
+This means:
+
+- New sessions receive the latest deployment.
+- Resumed sessions favor continuity over image updates.
+- An expired or unavailable snapshot causes the session to start from the latest
+  image.
+
+If a critical image change must apply to every session, complete or replace affected
+suspended sessions rather than assuming a redeploy will update them.
+
+## Retention
+
+Snapshots are retained for 30 days by default. Configure another positive duration,
+or choose indefinite retention when your operational process includes cleanup of
+retired deployments.
+
+Keep the Modal application deployed while relying on long-lived resumability. If the
+deployment or its persistent resources are removed, the mapping to a preserved
+workspace may no longer be available.
+
+## Recovery after uncertainty
+
+If the worker exits but the final Devin state cannot be confirmed, `modal-devin`
+attempts to preserve the workspace before reporting the invocation as failed. This
+favors recoverability over an uncertain success result.
+
+## Duplicate safety
+
+Outposts and Modal can both retry delivery. `modal-devin` coordinates attempts so a
+duplicate does not run a second worker for a session already being served.

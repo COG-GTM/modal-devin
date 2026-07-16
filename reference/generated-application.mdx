@@ -1,0 +1,109 @@
+---
+title: Generated application reference
+description: Supported customization points in the application produced by init.
+icon: file-code
+---
+
+`modal-devin init` writes an editable Modal application. Use the generator once, then
+maintain and deploy the generated file like other application code.
+
+## Worker and application
+
+```python
+worker = Worker.from_env(
+    "my-pool",
+    pool_id="outpost_env-...",
+    api_url="https://api.beta.devinenterprise.com",
+)
+
+app = modal.App(
+    "modal-devin-my-pool",
+    tags={"service": "modal-devin"},
+)
+devin_secret = modal.Secret.from_name("devin-outposts-token")
+```
+
+The worker connects the deployment to one Outposts pool. The
+[Modal App](https://modal.com/docs/guide/apps) name, tags, and
+[Secret](https://modal.com/docs/guide/secrets) name belong to your deployment and may
+be changed.
+
+## Workspace image
+
+```python
+base_image = (
+    worker.base_image()
+    # Add every application-specific build step here.
+)
+
+image = worker.prepare_image(base_image)
+```
+
+Add project tools and source before `prepare_image()`. New sessions start from this
+image; resumed sessions use their preserved filesystem when available.
+
+## Session entrypoint
+
+```python
+@app.function(
+    name="session",
+    image=image,
+    secrets=[devin_secret],
+    timeout=worker.session_function_timeout_seconds,
+)
+def session(session_id: str) -> None:
+    worker.run_session(
+        session_id,
+        app=app,
+        image=image,
+    )
+```
+
+Customize the decorator using Modal's [retry](https://modal.com/docs/guide/retries)
+and [region](https://modal.com/docs/guide/region-selection) controls. Pass supported
+[Sandbox resource options](https://modal.com/docs/guide/sandbox-resources) such as
+CPU, memory, and region to `run_session()`.
+
+## Scheduler entrypoint
+
+```python
+@app.function(
+    name="scheduler",
+    image=controller_image,
+    secrets=[devin_secret],
+    schedule=modal.Period(seconds=worker.settings.scheduler_interval_seconds),
+    max_containers=1,
+)
+def scheduler() -> None:
+    worker.dispatch_pending_sessions(session.spawn)
+```
+
+Customize the [schedule](https://modal.com/docs/guide/cron) and its Modal placement
+policy. Keep its call structure and single-container limit unchanged.
+
+## Supported customization
+
+You can change:
+
+- Application name and tags.
+- Modal Secret name.
+- Image build operations before `prepare_image()`.
+- Function resources, regions, retries, and schedule.
+- Supported Sandbox resource options in `run_session()`.
+- Additional functions and resources in the same Modal application.
+
+## Required wiring
+
+Keep these generated values in place:
+
+| Keep | User-visible reason |
+| --- | --- |
+| The Devin Secret on both functions | The deployment must authenticate while finding and serving sessions |
+| `prepare_image()` after custom build steps | Later image operations are unsupported |
+| The same prepared `image` in the decorator and `run_session()` | New sessions must start from the image you deployed |
+| `max_containers=1` on the scheduler | Prevents duplicate scheduling races |
+| `session.spawn` passed to the dispatcher | Allows sessions to start independently |
+| Lifecycle exceptions propagating | Modal must record failed attempts accurately |
+| Managed command, timeout, work directory, and readiness options | Recovery and cleanup depend on them |
+
+Keep the deployment scheduled while relying on long-lived resumability.

@@ -12,7 +12,6 @@ from modal_devin._exceptions import (
     SessionStatusUnknownError,
     WorkerExitedError,
 )
-from modal_devin.images import clone_private_repo
 from modal_devin.worker import Worker
 
 try:
@@ -31,5 +30,4 @@ __all__ = [
     "WorkerExitedError",
     "WorkerSettings",
     "__version__",
-    "clone_private_repo",
 ]

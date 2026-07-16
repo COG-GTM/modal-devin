@@ -1,0 +1,96 @@
+---
+title: Troubleshoot a deployment
+description: Diagnose setup, startup, worker, and resumability problems.
+icon: stethoscope
+---
+
+Start with the local prerequisite check, then inspect the affected Modal application:
+
+```bash
+uv run modal-devin doctor
+```
+
+## Setup fails
+
+<AccordionGroup>
+  <Accordion title="The expected Modal Secret is missing">
+    Create the Secret or pass its actual name to `init --secret-name` and
+    `doctor --secret-name`. Its Devin credential must be authorized for the pool.
+  </Accordion>
+  <Accordion title="The installed Modal SDK is unsupported">
+    Install the Modal version supported by this `modal-devin` release, run `uv sync`,
+    and repeat `modal-devin doctor`.
+  </Accordion>
+  <Accordion title="The Devin CLI is not found">
+    The CLI is required to create a pool, but not to deploy an existing pool ID.
+    Install it or pass `--pool-id` to `init`.
+  </Accordion>
+  <Accordion title="The generated file already exists">
+    Edit and redeploy the existing file, or choose another name or `--pools-dir`.
+    `init` never overwrites application code.
+  </Accordion>
+</AccordionGroup>
+
+## The image does not build
+
+<AccordionGroup>
+  <Accordion title="A build operation appears after prepare_image()">
+    Move package installation, environment, copy, and clone operations before
+    `worker.prepare_image(base_image)`. Keep `prepare_image()` last.
+  </Accordion>
+  <Accordion title="A standard tool fails to install">
+    Retry once to rule out a transient network failure, then inspect the Modal build
+    output. The image cannot deploy until the failed dependency installs successfully.
+  </Accordion>
+</AccordionGroup>
+
+## No session starts
+
+1. Confirm the session was assigned to the same Outposts pool ID as the generated
+   application.
+2. Confirm the Modal application is deployed and its scheduled function is active.
+3. Run `modal-devin doctor` with the Secret name used by the application.
+4. Inspect the scheduler logs for an authentication, API, image-build, or dispatch
+   error.
+5. Allow extra time for the first session while required images build.
+
+An invocation may also exit quickly when another worker has already accepted the
+same session. This is normal and does not interrupt the winning worker.
+
+## A session invocation fails
+
+<AccordionGroup>
+  <Accordion title="WorkerExitedError">
+    The Devin worker returned a nonzero status. Inspect the worker output immediately
+    before the error for the actionable failure.
+  </Accordion>
+  <Accordion title="SessionStatusUnknownError">
+    The runtime could not confirm a safe final state. It preserves the workspace when
+    possible so a later attempt can recover. Check preceding API errors and retry the
+    session after the upstream issue is resolved.
+  </Accordion>
+  <Accordion title="Startup readiness timed out">
+    Inspect image availability and Sandbox startup errors. Increase readiness timing
+    only when logs show a healthy startup consistently approaching the current limit.
+  </Accordion>
+  <Accordion title="Several sessions fail to start together">
+    Inspect each reported error. Independent sessions that started successfully remain
+    active; fix the shared credential, image, capacity, or API problem before retrying
+    the failures.
+  </Accordion>
+</AccordionGroup>
+
+## A session does not resume
+
+If a stored filesystem snapshot expired or became unavailable, the next attempt
+starts from the current base image. Check snapshot retention and confirm that the
+deployment remained active while resumability was required.
+
+For a legitimately large workspace that cannot be preserved within the configured
+time, increase `MODAL_DEVIN_SNAPSHOT_TIMEOUT_SECONDS` or remove disposable caches and
+generated files.
+
+If the problem appears to be a defect, open a
+[GitHub issue](https://github.com/aaazzam/modal-devin/issues) without credentials or
+sensitive worker output. Report vulnerabilities privately through the repository's
+security page.

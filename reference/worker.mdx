@@ -1,0 +1,146 @@
+---
+title: Worker reference
+description: Configure one Outposts pool, build its image, and run its Modal entrypoints.
+icon: gears
+---
+
+`Worker` is the supported runtime interface for one Devin Outposts pool.
+
+```python
+from modal_devin import Worker
+```
+
+## Constructor
+
+```python
+Worker(
+    name: str,
+    *,
+    pool_id: str,
+    api_url: str = "https://api.beta.devinenterprise.com",
+    settings: WorkerSettings | None = None,
+)
+```
+
+<ParamField path="name" type="string" required>
+  Durable name for this deployment. It must contain a non-whitespace character.
+</ParamField>
+
+<ParamField path="pool_id" type="string" required>
+  Devin Outposts pool ID.
+</ParamField>
+
+<ParamField path="api_url" type="string" default="https://api.beta.devinenterprise.com">
+  Devin API base URL. Credentials, query strings, and fragments are rejected.
+</ParamField>
+
+<ParamField path="settings" type="WorkerSettings | None" default="None">
+  Validated runtime policy. Defaults to `WorkerSettings()`.
+</ParamField>
+
+## `Worker.from_env()`
+
+```python
+Worker.from_env(
+    name: str,
+    *,
+    pool_id: str,
+    api_url: str = "https://api.beta.devinenterprise.com",
+) -> Worker
+```
+
+Creates a worker whose runtime settings come from `MODAL_DEVIN_*` environment
+variables.
+
+## Properties
+
+| Property | Meaning |
+| --- | --- |
+| `name` | Original deployment name |
+| `app_name` | Conventional generated Modal application name |
+| `settings` | Validated `WorkerSettings` value |
+| `session_function_timeout_seconds` | Minimum safe timeout for the session function |
+
+## `controller_image()`
+
+```python
+worker.controller_image(*, python_version: str = "3.12") -> modal.Image
+```
+
+Returns the image used by the generated scheduler. Most applications should leave it
+unchanged.
+
+## `base_image()`
+
+```python
+worker.base_image(
+    *,
+    python_version: str = "3.12",
+    install_ffmpeg: bool = True,
+    install_chrome: bool = True,
+) -> modal.Image
+```
+
+Returns the customizable image for new session workspaces. It includes the Devin CLI,
+common system tools, and `/root/workspace`.
+
+## `prepare_image()`
+
+```python
+worker.prepare_image(image: modal.Image) -> modal.Image
+```
+
+Finishes a customized workspace image. Call it once after every custom image
+operation, and keep the generated application wiring unchanged.
+
+## `run_session()`
+
+```python
+worker.run_session(
+    session_id: str,
+    *,
+    app: modal.App,
+    image: modal.Image,
+    **sandbox_options,
+) -> None
+```
+
+Runs one accepted session from workspace startup through worker execution,
+resumability, and cleanup.
+
+<ParamField path="session_id" type="string" required>
+  Devin session ID supplied by the scheduler.
+</ParamField>
+
+<ParamField path="app" type="modal.App" required>
+  Deployed Modal application.
+</ParamField>
+
+<ParamField path="image" type="modal.Image" required>
+  Prepared workspace image for a new session.
+</ParamField>
+
+Additional supported keywords follow
+[`modal.Sandbox.create`](https://modal.com/docs/sdk/py/latest/modal.Sandbox#create),
+including resources and region. Positional commands and the managed `timeout`,
+`workdir`, and `readiness_probe` options are rejected.
+
+The containing function must receive the configured Devin credential.
+
+## `dispatch_pending_sessions()`
+
+```python
+worker.dispatch_pending_sessions(
+    spawn_session: Callable[[str], object],
+) -> None
+```
+
+Finds queued sessions for the configured pool and starts eligible Modal invocations.
+Pass the generated session function's asynchronous spawn method:
+
+```python
+worker.dispatch_pending_sessions(session.spawn)
+```
+
+The scheduler function must receive the configured Devin credential and retain the
+generated single-container limit.

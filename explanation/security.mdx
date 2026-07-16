@@ -1,0 +1,63 @@
+---
+title: Security model
+description: Credential boundaries, workload capabilities, and deployment guidance.
+icon: shield-halved
+---
+
+`modal-devin` reduces where long-lived credentials appear and fails conservatively
+when it cannot establish a safe session state. It does not make an arbitrary session
+workload incapable of using the Outposts capability assigned to it.
+
+## Devin credential boundary
+
+Both orchestration and the worker need to communicate with Devin. The generated Modal
+functions receive the configured [Secret](https://modal.com/docs/guide/secrets), but
+the raw token is kept out of the main Sandbox environment.
+
+The worker communicates through a restricted local credential boundary that permits
+the Outposts API capability it needs. Other API paths are rejected.
+
+This reduces accidental exposure through environment dumps, child processes,
+diagnostics, and project tooling. A process inside the Sandbox can still exercise the
+allowed Outposts capability, so:
+
+- Use a least-privilege Devin service user.
+- Separate pools and credentials for different trust environments.
+- Do not expose unrelated credentials to the session workload.
+
+## Token handling during setup
+
+The interactive setup:
+
+- Prompts without echo.
+- Avoids placing the token in subprocess arguments.
+- Stores it in a named Modal Secret when approved.
+- Does not write it into the generated application.
+
+Avoid supplying tokens directly in shell commands, checked-in files, or clone URLs.
+
+## Network model
+
+The Devin worker initiates outbound connections to Devin Cloud. No inbound port or
+public IP is required. Apply Modal's
+[Sandbox network controls](https://modal.com/docs/guide/sandbox-networking) to any
+internal services the session is allowed to reach.
+
+## Recovery behavior
+
+When final session state is unavailable or unrecognized, `modal-devin` does not assume
+the work completed successfully. It attempts to preserve the filesystem and reports a
+failure so the condition remains visible to Modal retries and monitoring.
+
+## Supply-chain considerations
+
+Worker images install the Devin CLI and other selected tools during the trusted image
+build. Review build output, restrict who can change image definitions, and follow
+project releases for dependency and compatibility updates.
+
+## Report a vulnerability
+
+Use [GitHub private vulnerability reporting](https://github.com/aaazzam/modal-devin/security).
+Do not include live Devin, Modal, or repository credentials. Include the affected
+version, reproduction steps, expected impact, and whether a credential or workload
+may have been exposed.

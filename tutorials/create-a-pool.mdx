@@ -1,0 +1,87 @@
+---
+title: Create a pool interactively
+description: Create a Devin Outposts pool and deploy its Modal orchestrator.
+icon: wand-magic-sparkles
+---
+
+Use the setup wizard when you do not already have an Outposts pool. It can configure
+Modal, create the pool, store the Devin token, generate the application, and deploy
+it.
+
+## Before you begin
+
+Install the package and the Devin CLI:
+
+```bash
+uv add modal-devin
+curl -fsSL https://cli.devin.ai/install.sh | bash
+```
+
+You also need a Devin organization with Outposts enabled and a token authorized to
+create and serve pools.
+
+<Steps>
+  <Step title="Start the wizard">
+    ```bash
+    uv run modal-devin init
+    ```
+  </Step>
+
+  <Step title="Configure Modal if prompted">
+    When local credentials are missing, accept **Set up Modal now?** to launch
+    `modal setup`.
+  </Step>
+
+  <Step title="Name the deployment">
+    Choose a durable name that describes the pool's role, such as
+    `frontend-production` or `gpu-builds`. The wizard uses it for the pool, generated
+    filename, and Modal resources.
+  </Step>
+
+  <Step title="Provide the Devin token">
+    The wizard uses the token to create the pool and offers to store it as a Modal
+    Secret. Input is hidden and the token is not written to the generated application.
+  </Step>
+
+  <Step title="Deploy">
+    Accept **Deploy now?** or deploy the generated file later:
+
+    ```bash
+    uv run modal-devin deploy pools/<generated_name>.py
+    ```
+  </Step>
+</Steps>
+
+## If setup fails
+
+The wizard avoids overwriting existing files and reports any remote resource that
+may need cleanup. Follow the printed recovery step, then rerun the command after the
+underlying problem is fixed.
+
+## Automate setup
+
+For non-interactive use, provide a name and an existing pool ID:
+
+```bash
+uv run modal-devin init ci-pool \
+  --pool-id outpost_env-... \
+  --secret-name ci-devin-token \
+  --pools-dir deployments \
+  --no-deploy
+```
+
+When `--pool-id` is omitted, `init` invokes the Devin CLI. In a non-interactive
+environment, make the expected Devin credential available to that command.
+
+See the complete [`init` option reference](/reference/cli#modal-devin-init).
+
+## Next steps
+
+<Columns cols={2}>
+  <Card title="Build the workspace" icon="folder-code" href="/tutorials/custom-workspace">
+    Add source code and tools to new sessions.
+  </Card>
+  <Card title="Configure runtime behavior" icon="sliders" href="/guides/runtime-configuration">
+    Change session duration, snapshot retention, polling, and logs.
+  </Card>
+</Columns>

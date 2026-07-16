@@ -1,0 +1,68 @@
+---
+title: WorkerSettings reference
+description: Runtime policy, environment variables, defaults, and validation.
+icon: sliders
+---
+
+`WorkerSettings` contains validated runtime policy for one worker deployment.
+
+```python
+from modal_devin import WorkerSettings
+```
+
+## Common settings
+
+| Field | Type | Default | Use |
+| --- | --- | ---: | --- |
+| `scheduler_interval_seconds` | `int` | `30` | How often the generated schedule checks for work |
+| `session_timeout_seconds` | `int` | `1800` | Maximum Devin worker duration |
+| `snapshot_ttl_seconds` | `int \| None` | `2592000` | Retention for a resumable workspace; `None` is indefinite |
+| `log_level` | `str` | `"INFO"` | `modal_devin.worker` log detail |
+
+## Advanced recovery settings
+
+Change these only for a diagnosed deployment or with support guidance:
+
+| Field | Type | Default | Use |
+| --- | --- | ---: | --- |
+| `api_timeout_seconds` | `float` | `30.0` | Per-request timeout for Devin APIs |
+| `status_attempts` | `int` | `3` | Final-state lookup attempts |
+| `status_retry_delay_seconds` | `float` | `1.0` | Base delay between final-state attempts |
+| `sandbox_ready_timeout_seconds` | `int` | `120` | Maximum Sandbox startup wait |
+| `sidecar_ready_timeout_seconds` | `int` | `60` | Maximum credential-boundary startup wait |
+| `snapshot_timeout_seconds` | `int` | `120` | Maximum filesystem preservation time |
+
+## Environment variables
+
+`WorkerSettings.from_env()` reads:
+
+| Environment variable | Default |
+| --- | ---: |
+| `MODAL_DEVIN_SCHEDULER_INTERVAL_SECONDS` | `30` |
+| `MODAL_DEVIN_SESSION_TIMEOUT_SECONDS` | `1800` |
+| `MODAL_DEVIN_SNAPSHOT_TTL_SECONDS` | `2592000` |
+| `MODAL_DEVIN_LOG_LEVEL` | `INFO` |
+| `MODAL_DEVIN_API_TIMEOUT_SECONDS` | `30.0` |
+| `MODAL_DEVIN_STATUS_ATTEMPTS` | `3` |
+| `MODAL_DEVIN_STATUS_RETRY_DELAY_SECONDS` | `1.0` |
+| `MODAL_DEVIN_SANDBOX_READY_TIMEOUT_SECONDS` | `120` |
+| `MODAL_DEVIN_SIDECAR_READY_TIMEOUT_SECONDS` | `60` |
+| `MODAL_DEVIN_SNAPSHOT_TIMEOUT_SECONDS` | `120` |
+
+For snapshot retention, `none` and `null` mean indefinite retention. Names are exact;
+unrecognized `MODAL_DEVIN_*` variables are ignored.
+
+## Validation
+
+Durations, counts, and timeouts must be positive, except that retry delay may be zero
+and snapshot retention may be `None`. Log level is case-insensitive and accepts
+`CRITICAL`, `ERROR`, `WARNING`, `INFO`, or `DEBUG`.
+
+Invalid values raise `ConfigurationError` during application startup.
+
+## Derived function timeout
+
+`worker.session_function_timeout_seconds` provides the minimum function duration
+needed for the configured worker run plus startup, final-state handling, filesystem
+preservation, and cleanup. Use the property in the generated decorator instead of
+copying a numeric value.

@@ -59,3 +59,15 @@ jobs:
           cd "$tmpdir"
           uv run --isolated --with "$GITHUB_WORKSPACE"/dist/*.whl \
             python -c "from modal_devin import Worker; assert Worker('smoke', pool_id='pool').name == 'smoke'"
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - run: npx -y mint broken-links

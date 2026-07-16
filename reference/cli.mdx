@@ -1,0 +1,152 @@
+---
+title: Command-line reference
+description: Complete reference for modal-devin init, deploy, doctor, and global options.
+icon: terminal
+---
+
+The `modal-devin` CLI generates and operates the user-owned Modal application. Run it through the project's environment:
+
+```bash
+uv run modal-devin COMMAND
+```
+
+The package module is an equivalent entrypoint:
+
+```bash
+uv run python -m modal_devin COMMAND
+```
+
+## Global commands
+
+| Command | Purpose |
+| --- | --- |
+| `init` | Generate a Modal pool application, optionally creating its Devin pool, Modal Secret, and deployment |
+| `deploy` | Deploy a generated pool file through the current Python environment |
+| `doctor` | Check local credentials, secret presence, and runtime compatibility |
+| `--help`, `-h` | Display help |
+| `--version` | Display the installed application version |
+
+## `modal-devin init`
+
+```text
+modal-devin init [OPTIONS] [NAME]
+```
+
+Generates one Python application in `POOLS_DIR`. In an interactive terminal, omitted inputs are prompted for. In scripts and CI, `NAME` is required.
+
+### Arguments and options
+
+<ParamField path="NAME" type="string">
+  Human-readable worker pool name. It is also available as `--name`.
+</ParamField>
+
+<ParamField path="--pool-id" type="string">
+  Existing Devin Outposts pool ID. When omitted, `init` invokes `devin worker pool create`.
+</ParamField>
+
+<ParamField path="--api-url" type="string" default="https://api.beta.devinenterprise.com">
+  Base Devin API URL. It must be an absolute HTTP or HTTPS URL without credentials, a query string, or a fragment.
+</ParamField>
+
+<ParamField path="--secret-name" type="string" default="devin-outposts-token">
+  Name of the [Modal Secret](https://modal.com/docs/guide/secrets) attached to both
+  generated functions. The Secret must expose `DEVIN_OUTPOSTS_TOKEN`.
+</ParamField>
+
+<ParamField path="--pools-dir" type="path" default="pools">
+  Directory for the generated Python file. Parent directories are created as needed.
+</ParamField>
+
+<ParamField path="--deploy / --no-deploy" type="boolean">
+  Deploy or skip deployment after generation. When omitted interactively, the wizard prompts. When omitted non-interactively, it does not deploy.
+</ParamField>
+
+### Output filename
+
+The name becomes a safe lowercase Python module stem:
+
+- Non-ASCII-alphanumeric and non-underscore runs become `_`.
+- Leading and trailing underscores are removed.
+- A name beginning with a digit gains the `pool_` prefix.
+- A name with no ASCII letter or digit is rejected.
+
+For example, `Frontend / Prod` becomes `pools/frontend_prod.py`.
+
+### Interactive setup
+
+Depending on answers and existing state, the wizard may:
+
+1. Run `modal setup`.
+2. Invoke `devin worker pool create NAME --api-url API_URL`.
+3. Create a named Modal Secret directly through the Modal SDK.
+4. Write the generated application.
+5. Deploy it with Modal.
+
+The credential stays in memory during Secret creation. It is not passed in a
+subprocess argument or written to a local file.
+
+### Setup safety
+
+- `init` refuses to overwrite an existing output file.
+- It validates the output path before creating remote resources.
+- If setup cannot finish, it reports any remote resource that may require cleanup.
+
+### Examples
+
+```bash
+# Interactive setup
+uv run modal-devin init
+
+# Generate from an existing pool
+uv run modal-devin init my-pool --pool-id outpost_env-...
+
+# Generate to another directory without deploying
+uv run modal-devin init my-pool \
+  --pool-id outpost_env-... \
+  --pools-dir deployments \
+  --no-deploy
+
+# Generate and deploy non-interactively
+uv run modal-devin init my-pool \
+  --pool-id outpost_env-... \
+  --deploy
+```
+
+## `modal-devin deploy`
+
+```text
+modal-devin deploy POOL-FILE
+```
+
+<ParamField path="POOL-FILE" type="path" required>
+  Generated or handwritten Modal pool application to deploy.
+</ParamField>
+
+The command deploys the selected application with the same project environment that
+runs `modal-devin`. A failed Modal deployment produces a nonzero exit status.
+
+```bash
+uv run modal-devin deploy pools/my_pool.py
+```
+
+## `modal-devin doctor`
+
+```text
+modal-devin doctor [--secret-name NAME]
+```
+
+<ParamField path="--secret-name" type="string" default="devin-outposts-token">
+  Modal Secret name to verify.
+</ParamField>
+
+The command checks:
+
+| Check | Failure effect |
+| --- | --- |
+| Installed Modal SDK is compatible with this runtime | Exit status 1 |
+| Local Modal token is valid | Exit status 1 |
+| Modal secrets can be listed | Exit status 1 |
+| Named Modal Secret exists | Exit status 1 |
+| Devin CLI is on `PATH` | Warning only |
+
+The Devin CLI is optional at runtime because an existing pool can be deployed without it.

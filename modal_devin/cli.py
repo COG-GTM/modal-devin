@@ -4,13 +4,11 @@
 requires explicit values in scripts and CI.
 """
 
-import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import urllib.error
 import urllib.request
 from collections import deque
@@ -218,48 +216,20 @@ def _modal_deploy(pool_file: Path) -> int:
 
 
 def _existing_secret_names() -> set[str] | None:
-    """Names of secrets already in the workspace, or None if the check itself failed (not
-    logged in, ...) -- callers should fall back to manual instructions."""
+    """Names of secrets already in the workspace, or None if the lookup failed."""
     try:
-        result = _modal("secret", "list", "--json")
-    except (subprocess.TimeoutExpired, OSError):
+        secrets = modal.Secret.objects.list()
+    except Exception:
         return None
-    if result.returncode != 0:
-        return None
-    try:
-        payload: object = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, list):
-        return None
-    names: set[str] = set()
-    for item in payload:
-        if isinstance(item, dict):
-            name = item.get("name")
-            if isinstance(name, str):
-                names.add(name)
-    return names
+    return {secret.name for secret in secrets if secret.name is not None}
 
 
-def _create_modal_secret(secret_name: str, token: str) -> subprocess.CompletedProcess[str]:
-    """Create a Modal secret without placing the token in the subprocess argv."""
-    tmp_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            prefix="modal-devin-secret-",
-            suffix=".json",
-            delete=False,
-        ) as secret_file:
-            tmp_path = secret_file.name
-            os.chmod(tmp_path, 0o600)
-            json.dump({"DEVIN_OUTPOSTS_TOKEN": token}, secret_file)
-            secret_file.write("\n")
-        return _modal("secret", "create", "--from-json", tmp_path, secret_name)
-    finally:
-        if tmp_path is not None:
-            Path(tmp_path).unlink(missing_ok=True)
+def _create_modal_secret(secret_name: str, token: str) -> None:
+    """Create a named Modal Secret directly, keeping the token in memory."""
+    modal.Secret.objects.create(
+        secret_name,
+        {"DEVIN_OUTPOSTS_TOKEN": token},
+    )
 
 
 def _delete_pool(api_url: str, token: str | None, pool_id: str) -> bool:
@@ -430,18 +400,19 @@ def init_worker(
             )
         if token and _confirm(f"Create Modal secret {secret_name} now?", default=True):
             _step_start(f"Creating Modal secret {secret_name}...")
-            result = _create_modal_secret(secret_name, token)
-            if result.returncode != 0:
+            try:
+                _create_modal_secret(secret_name, token)
+            except Exception as error:
                 _step_failed(f"Modal secret {secret_name} creation failed")
-                _console.print(result.stderr)
+                _console.print(str(error))
             else:
                 _step_done(f"Created Modal secret [bold]{secret_name}[/bold]")
                 secret_created = True
 
     if not secret_created and secret_name not in (existing_secrets or set()):
         _console.print(
-            f"[dim]next:[/dim] modal secret create --from-json "
-            f"[cyan]/path/to/secret.json[/cyan] {secret_name}"
+            f"[dim]next:[/dim] create Modal secret [bold]{escape(secret_name)}[/bold] "
+            "with a [bold]DEVIN_OUTPOSTS_TOKEN[/bold] value"
         )
 
     should_deploy = (

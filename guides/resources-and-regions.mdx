@@ -1,0 +1,76 @@
+---
+title: Configure resources and regions
+description: Choose compute and placement for Devin session workloads.
+icon: microchip
+---
+
+Set the resources for the Devin workspace by passing standard
+[Modal Sandbox options](https://modal.com/docs/guide/sandbox-resources) to
+`run_session()` in the generated application:
+
+```python
+def session(session_id: str) -> None:
+    worker.run_session(
+        session_id,
+        app=app,
+        image=image,
+        cpu=4,
+        memory=8192,
+        region="eu-west",
+    )
+```
+
+These options control the Sandbox where Devin runs commands and edits the project.
+The installed Modal SDK determines which
+[`Sandbox.create` options](https://modal.com/docs/sdk/py/latest/modal.Sandbox#create)
+are available. See Modal's general
+[resource configuration guide](https://modal.com/docs/guide/resources) for request,
+limit, and billing semantics.
+
+## Configure orchestration policy
+
+The surrounding Modal function manages the session lifecycle. Use its decorator for
+[retry](https://modal.com/docs/guide/retries) and
+[placement](https://modal.com/docs/guide/region-selection) policy when needed:
+
+```python
+@app.function(
+    name="session",
+    image=image,
+    secrets=[devin_secret],
+    timeout=worker.session_function_timeout_seconds,
+    retries=2,
+    region="eu-west",
+)
+def session(session_id: str) -> None:
+    worker.run_session(
+        session_id,
+        app=app,
+        image=image,
+        cpu=4,
+        memory=8192,
+        region="eu-west",
+    )
+```
+
+These are two different placements: the function's `region` places the lightweight
+orchestration call itself, while the Sandbox's `region` places where Devin actually
+runs commands and edits files. Most deployments only need to set `region` on the
+Sandbox. Set it on the function too only when you also want the orchestration call
+co-located, for example alongside a database or internal service it depends on. When
+constraining both, choose compatible regions and capacity available to your Modal
+workspace.
+
+## Managed options
+
+Do not pass a positional command or override `timeout`, `workdir`, or
+`readiness_probe` through `run_session()`. `modal-devin` manages those values so it
+can start, preserve, and clean up the session safely.
+
+Use [`WorkerSettings`](/reference/settings) to change supported lifecycle timing.
+Keep the function timeout at least `worker.session_function_timeout_seconds`.
+
+## Scheduler policy
+
+Edit the generated scheduler decorator to change its region or schedule. Keep
+`max_containers=1`; it is required for safe dispatch with the current runtime.

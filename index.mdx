@@ -1,0 +1,85 @@
+---
+title: Run Devin workers on Modal
+description: Run Devin Outposts sessions in customizable, resumable Modal Sandboxes.
+icon: rocket
+---
+
+`modal-devin` runs Devin Outposts sessions on Modal. Devin's planning remains in
+Devin Cloud while commands, file edits, and repository access happen in isolated
+Modal Sandboxes that you control.
+
+Use it when you need:
+
+- Custom tools, repositories, or system packages for Devin sessions.
+- Access to services and registries available from your Modal environment.
+- Modal compute, memory, region, retry, and scheduling controls.
+- A preserved workspace when a Devin session is suspended and resumed.
+
+<Note>
+  `modal-devin` is alpha software. Until the first stable release, only the latest
+  release on the default branch receives security fixes.
+</Note>
+
+## How it fits into Outposts
+
+Outposts has two layers:
+
+1. The **worker** executes one Devin session. `modal-devin` runs it inside a Modal
+   Sandbox.
+2. The **orchestrator** finds queued sessions and manages their compute lifecycle.
+   `modal-devin` deploys this layer as a Modal application.
+
+Workers need outbound HTTPS access to Devin. They do not require inbound ports or a
+public IP.
+
+```mermaid
+flowchart LR
+    D["Devin Cloud"] --> P["Your Outposts pool"]
+    P --> O["modal-devin orchestrator"]
+    O --> S["Modal Sandbox"]
+    S --> W["Devin worker and your workspace"]
+```
+
+## Choose your path
+
+<Columns cols={2}>
+  <Card title="Deploy an existing pool" icon="play" href="/tutorials/first-worker">
+    Go from a pool ID to a verified Modal deployment.
+  </Card>
+  <Card title="Create a new pool" icon="wand-magic-sparkles" href="/tutorials/create-a-pool">
+    Create the pool, credential, and application interactively.
+  </Card>
+  <Card title="Build the workspace" icon="code" href="/tutorials/custom-workspace">
+    Add project source and tools to every new session.
+  </Card>
+  <Card title="Configure compute" icon="microchip" href="/guides/resources-and-regions">
+    Choose resources and placement for session workloads.
+  </Card>
+</Columns>
+
+## What you control
+
+The setup command generates an ordinary Modal application in your project. Edit it
+to choose:
+
+- Project source, tools, and dependencies.
+- Modal Secrets available to your functions and workloads.
+- CPU, memory, region, retries, and schedule.
+- Session duration and snapshot retention.
+- Application names, tags, and deployment policy.
+
+`modal-devin` handles queue consumption, worker startup, resumability, credentials,
+and cleanup. Those lifecycle mechanics do not need to be reimplemented in your
+application.
+
+## Requirements
+
+- Python 3.11 or newer.
+- A Modal account with locally configured credentials.
+- A Devin organization with Outposts enabled.
+- An existing Outposts pool ID, or the Devin CLI to create one.
+- A Devin token authorized to manage the pool and serve its sessions.
+
+<Card title="Deploy your first worker" icon="arrow-right" href="/tutorials/first-worker" horizontal>
+  Follow the shortest path from installation to a verified deployment.
+</Card>

@@ -59,12 +59,16 @@ and uses semantic versioning.
 - The low-level public `poll_and_dispatch()`, `build_sidecar_image_id()`,
   `SessionRunner`, and `OutpostPoolConfig` surface.
 - The redundant `modal-devin outpost` command group.
+- The `clone_private_repo()` image-build helper.
 
 ### Security
 
+- Interactive Modal Secret creation now uses the public Modal SDK directly, keeping
+  the Devin service key in memory instead of writing a temporary JSON file or
+  invoking a secret-creation subprocess.
+- Secret discovery now uses the public Modal SDK instead of parsing subprocess JSON,
+  and credential setup documentation no longer stages tokens in local files.
 - The sidecar health check is served locally and no longer sends a token-bearing
   request to the upstream API.
 - The credential-injecting proxy only forwards Outposts API paths.
 - Worker output combines stdout and stderr so failures remain observable.
-- Private clone URLs with query strings are rejected so query-carried credentials
-  cannot enter build commands, logs, or Git remotes.

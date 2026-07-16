@@ -1,0 +1,68 @@
+---
+title: Operate a deployed worker
+description: Check health, follow sessions, redeploy changes, and preserve resumability.
+icon: gauge-high
+---
+
+The generated Modal application is the operational unit for one Outposts pool.
+
+## Check local prerequisites
+
+```bash
+uv run modal-devin doctor
+```
+
+Run this before the first deployment and after changing local credentials, the Modal
+SDK, or the configured Secret.
+
+## Follow a session
+
+Use the Modal dashboard or the
+[`modal app logs`](https://modal.com/docs/cli/latest/app#modal-app-logs) command. A
+healthy session follows this observable path:
+
+1. A session assigned to the pool starts a Modal invocation.
+2. The invocation logs show the Devin worker starting.
+3. Worker output is prefixed with the Devin session ID.
+4. The invocation finishes, or preserves the workspace when the session suspends.
+
+Common outcomes:
+
+| What you see | What it usually means |
+| --- | --- |
+| No invocation starts | The pool, credential, deployment, or queue needs attention |
+| An invocation exits immediately without an error | Another worker already accepted that session |
+| `WorkerExitedError` | The Devin worker returned a nonzero status; inspect the preceding output |
+| `SessionStatusUnknownError` | Final state could not be confirmed; recovery data was preserved when possible |
+
+## Deploy configuration changes
+
+Edit the generated pool file and redeploy it:
+
+```bash
+uv run modal-devin deploy pools/my_pool.py
+```
+
+Do not rerun `init` over an existing file; it intentionally refuses to overwrite
+application code.
+
+## Rotate the Devin token
+
+Update the [Modal Secret](https://modal.com/docs/guide/secrets) referenced by the
+generated application, then run:
+
+```bash
+uv run modal-devin doctor --secret-name devin-outposts-token
+```
+
+Avoid putting the token in command arguments, checked-in files, or shell history.
+
+## Preserve resumability
+
+Keep the deployment active while sessions may remain suspended. A resumed session
+uses its preserved filesystem when available; if that snapshot has expired, it starts
+from the current base image.
+
+<Card title="Troubleshoot failures" icon="stethoscope" href="/guides/troubleshooting" horizontal>
+  Match an observable symptom to its likely cause and corrective action.
+</Card>

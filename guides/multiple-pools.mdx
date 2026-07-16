@@ -1,0 +1,69 @@
+---
+title: Deploy multiple pools
+description: Run independent Devin Outposts pools from one Python project.
+icon: boxes-stacked
+---
+
+Generate one Modal application for each Outposts pool. This keeps their deployments,
+configuration, and resumable work independent.
+
+## Generate each application
+
+```bash
+uv run modal-devin init frontend \
+  --pool-id outpost_env-frontend \
+  --no-deploy
+
+uv run modal-devin init backend \
+  --pool-id outpost_env-backend \
+  --no-deploy
+```
+
+This creates:
+
+```text
+pools/
+├── frontend.py
+└── backend.py
+```
+
+## Choose credential boundaries
+
+Pools with the same trust requirements may reference the same
+[Modal Secret](https://modal.com/docs/guide/secrets):
+
+```python
+devin_secret = modal.Secret.from_name("devin-outposts-token")
+```
+
+Use separate Secrets when pools represent different
+[Modal Environments](https://modal.com/docs/guide/environments) or trust domains:
+
+```bash
+uv run modal-devin init production \
+  --pool-id outpost_env-production \
+  --secret-name production-devin-token
+```
+
+The selected credential must be authorized for the corresponding pool.
+
+## Customize independently
+
+Each application can use different repositories, tools, compute, regions, schedules,
+retention, credentials, and Modal tags. Edit and deploy each generated file normally.
+
+```bash
+uv run modal-devin deploy pools/frontend.py
+uv run modal-devin deploy pools/backend.py
+```
+
+## Use unique names
+
+Give every deployment a distinct, durable worker name. Names scope its Modal
+resources and resumable state; reusing a name can cause separate pools to target the
+same resources.
+
+<Tip>
+  Prefer an operational role such as `frontend-production` over a temporary
+  implementation detail.
+</Tip>

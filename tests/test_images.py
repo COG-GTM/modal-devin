@@ -16,12 +16,7 @@ from modal_devin.images import (
     _create_sidecar,
     _sidecar_image,
     _worker_image,
-    clone_private_repo,
 )
-
-
-def secret(name="github-token"):
-    return cast(modal.Secret, SimpleNamespace(name=name))
 
 
 def test_worker_image_remains_composable():
@@ -66,51 +61,6 @@ def test_sidecar_health_check_does_not_proxy_to_devin():
     assert "handle /opbeta/outposts/*" in _CADDYFILE
     assert 'respond "forbidden" 403' in _CADDYFILE
     assert isinstance(_sidecar_image(), modal.Image)
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "github.com/org/repo",
-        "http://github.com/org/repo",
-        "file:///tmp/repo",
-        "https://user:token@github.com/org/repo",
-        "https://github.com/org/repo?access_token=secret",
-        "https://github.com/org/repo#main",
-    ],
-)
-def test_private_clone_rejects_unsafe_urls(url):
-    with pytest.raises(ValueError):
-        clone_private_repo(Mock(), url, "/root/workspace/repo", token_secret=secret())
-
-
-def test_private_clone_keeps_token_out_of_command_and_remote_url():
-    image = Mock()
-
-    clone_private_repo(
-        image,
-        "https://github.com/acme/widgets",
-        "/root/workspace/widgets",
-        token_secret=secret(),
-    )
-
-    [command] = image.run_commands.call_args.args
-    assert "GIT_ASKPASS" in command
-    assert "github-token" in command  # secret name is diagnostic context
-    assert "GIT_CLONE_TOKEN}" in command
-    assert "https://github.com/acme/widgets" in command
-    assert image.run_commands.call_args.kwargs["secrets"] == [secret()]
-
-
-def test_private_clone_rejects_invalid_secret_environment_name():
-    with pytest.raises(ValueError, match="shell identifier"):
-        clone_private_repo(
-            Mock(),
-            "https://github.com/acme/widgets",
-            "/root/workspace/widgets",
-            token_secret=secret(),
-            token_env_var="BAD-NAME",
-        )
 
 
 def test_sidecar_adapter_has_a_clear_compatibility_error():

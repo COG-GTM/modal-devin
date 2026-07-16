@@ -1,0 +1,94 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "modal-devin",
+  "description": "Run secure, resumable Devin Outposts workers on Modal.",
+  "colors": {
+    "primary": "#3730A3",
+    "light": "#A5B4FC",
+    "dark": "#6366F1"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Start here",
+        "icon": "house",
+        "pages": [
+          "index"
+        ]
+      },
+      {
+        "group": "Tutorials",
+        "icon": "graduation-cap",
+        "pages": [
+          "tutorials/first-worker",
+          "tutorials/create-a-pool",
+          "tutorials/custom-workspace"
+        ]
+      },
+      {
+        "group": "How-to guides",
+        "icon": "screwdriver-wrench",
+        "pages": [
+          "guides/customize-image",
+          "guides/resources-and-regions",
+          "guides/runtime-configuration",
+          "guides/multiple-pools",
+          "guides/operate-a-worker",
+          "guides/troubleshooting"
+        ]
+      },
+      {
+        "group": "Concepts",
+        "icon": "lightbulb",
+        "pages": [
+          "explanation/architecture",
+          "explanation/resumability",
+          "explanation/security",
+          "explanation/session-lifecycle",
+          "explanation/timeouts"
+        ]
+      },
+      {
+        "group": "Reference",
+        "icon": "book-open",
+        "pages": [
+          "reference/cli",
+          "reference/worker",
+          "reference/settings",
+          "reference/images",
+          "reference/exceptions",
+          "reference/generated-application"
+        ]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/aaazzam/modal-devin"
+      }
+    ],
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/aaazzam/modal-devin"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/aaazzam/modal-devin"
+    }
+  },
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "chatgpt",
+      "claude"
+    ]
+  },
+  "styling": {
+    "eyebrows": "breadcrumbs"
+  }
+}

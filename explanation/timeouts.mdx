@@ -1,0 +1,43 @@
+---
+title: Timeouts
+description: Set session duration without interrupting startup, recovery, or cleanup.
+icon: stopwatch
+---
+
+The main timeout users normally choose is the maximum Devin worker duration:
+
+```text
+MODAL_DEVIN_SESSION_TIMEOUT_SECONDS=3600
+```
+
+The default is 30 minutes.
+
+## Why the Modal timeout is longer
+
+Stopping the worker is not the end of the session lifecycle. The Sandbox may still
+need time to start, confirm the final Devin state, preserve a filesystem, and clean up.
+
+The generated application therefore uses a derived function timeout:
+
+```python
+@app.function(timeout=worker.session_function_timeout_seconds, ...)
+```
+
+Keep this property in the decorator. It automatically stays aligned when session or
+recovery timing changes.
+
+## Tune safely
+
+1. Set `session_timeout_seconds` for the longest worker run you want to allow.
+2. Keep the generated function timeout property unchanged.
+3. Change readiness or snapshot timing only when logs identify that specific phase
+   as the bottleneck.
+4. Change API retry timing only for a known network or upstream reliability need.
+
+<Warning>
+  Do not pass `timeout=` through `run_session()`. An independent Sandbox timeout can
+  interrupt recovery or cleanup.
+</Warning>
+
+For every available advanced control and its default, see the
+[settings reference](/reference/settings).

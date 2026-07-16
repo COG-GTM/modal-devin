@@ -1,0 +1,67 @@
+---
+title: Exception reference
+description: Public modal-devin errors and the action to take for each one.
+icon: triangle-exclamation
+---
+
+All library-defined exceptions are importable from `modal_devin`.
+
+## `ModalDevinError`
+
+Base class for errors raised specifically by `modal-devin`. Catch it only when one
+fallback is appropriate for every library failure.
+
+## `ConfigurationError`
+
+The application contains an invalid worker name, URL, setting, environment value,
+credential, or managed Sandbox override. Correct the reported configuration and
+redeploy.
+
+## `ModalCompatibilityError`
+
+The installed Modal SDK does not provide a capability required by this release. Run
+`modal-devin doctor`, then install a supported Modal version.
+
+## `OutpostsAPIError`
+
+A Devin API request failed because of authentication, HTTP, connection, or timeout
+behavior. Check the credential, pool, configured API URL, and preceding network error.
+
+## `OutpostsProtocolError`
+
+Devin returned a response that this release could not handle safely. Check release
+compatibility and the original response error; do not treat the affected invocation
+as successful.
+
+## `SessionStatusUnknownError`
+
+The worker exited, but `modal-devin` could not confirm a safe final session state. It
+attempts to preserve the filesystem before raising. Resolve the preceding API or
+compatibility problem, then retry or resume the session.
+
+## `WorkerExitedError`
+
+The Devin worker returned a nonzero status after recovery handling. Inspect the
+preceding worker output.
+
+```python
+try:
+    worker.run_session(session_id, app=app, image=image)
+except WorkerExitedError as error:
+    print(error.session_id)
+    print(error.returncode)
+    raise
+```
+
+<ResponseField name="session_id" type="str">
+  Session whose worker failed.
+</ResponseField>
+
+<ResponseField name="returncode" type="int">
+  Nonzero worker process exit status.
+</ResponseField>
+
+<Warning>
+  Let lifecycle exceptions propagate from the generated function so Modal records
+  failed attempts and applies its configured retry policy.
+</Warning>

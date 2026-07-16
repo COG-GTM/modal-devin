@@ -1,0 +1,33 @@
+---
+title: Image helpers reference
+description: Build the standard workspace and controller images.
+icon: compact-disc
+---
+
+## Image helpers
+
+These helpers return standard
+[`modal.Image` objects](https://modal.com/docs/sdk/py/latest/modal.Image). Use Modal's
+[Images guide](https://modal.com/docs/guide/images) for general image operations.
+
+| API | Use |
+| --- | --- |
+| `worker.base_image()` | Start a customizable Devin workspace image |
+| `worker.prepare_image(image)` | Finish the image after all custom build operations |
+| `worker.controller_image()` | Supply the generated scheduler image |
+
+Most applications customize only `base_image()` and leave the generated controller
+image unchanged.
+
+## Standard workspace contents
+
+`base_image()` includes:
+
+- Git, curl, CA certificates, and tar.
+- The Devin CLI.
+- `/root/workspace` as the managed working directory.
+- FFmpeg by default for screen recording.
+- Chromium by default for browser and computer-use features.
+
+Use `install_ffmpeg=False` or `install_chrome=False` when those features are not
+needed.
