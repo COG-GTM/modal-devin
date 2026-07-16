@@ -1,11 +1,11 @@
 ---
 title: Deploy your first worker
-description: Connect an existing Devin Outposts pool to Modal and verify a session.
+description: Connect an existing Devin Outposts outpost to Modal and verify a session.
 icon: play
 ---
 
-This tutorial deploys the `modal-devin` orchestrator for an existing Outposts pool.
-At the end, sessions assigned to that pool can run inside Modal Sandboxes.
+This tutorial deploys the `modal-devin` orchestrator for an existing outpost.
+At the end, sessions assigned to that outpost can run inside Modal Sandboxes.
 
 ## Before you begin
 
@@ -14,8 +14,8 @@ You need:
 - [uv](https://docs.astral.sh/uv/) and Python 3.11 or newer.
 - A [Modal account](https://modal.com/docs/guide/modal-user-account-setup).
 - A Devin organization with Outposts enabled.
-- An Outposts pool ID such as `outpost_env-...`.
-- A Devin token authorized to manage the pool and serve its sessions.
+- An outpost ID such as `outpost_env-...`.
+- A Devin token authorized to manage the outpost and serve its sessions.
 
 <Steps>
   <Step title="Install modal-devin">
@@ -36,11 +36,11 @@ You need:
   </Step>
 
   <Step title="Generate the application">
-    Replace the sample ID with your pool ID:
+    Replace the sample ID with your outpost ID:
 
     ```bash
-    uv run modal-devin init my-pool \
-      --pool-id outpost_env-... \
+    uv run modal-devin init my-outpost \
+      --outpost-id outpost_env-... \
       --no-deploy
     ```
 
@@ -48,7 +48,8 @@ You need:
     exist, the wizard prompts for the Devin token and offers to create it. The token
     is entered without echo and is not written to the generated Python file.
 
-    The command writes `pools/my_pool.py`. It will not overwrite an existing file.
+    The command writes `outposts/my_outpost.py`. It will not overwrite an existing
+    file.
   </Step>
 
   <Step title="Check the prerequisites">
@@ -61,7 +62,7 @@ You need:
 
   <Step title="Deploy">
     ```bash
-    uv run modal-devin deploy pools/my_pool.py
+    uv run modal-devin deploy outposts/my_outpost.py
     ```
 
     The first deployment or first session can take longer while Modal builds the
@@ -71,7 +72,7 @@ You need:
 
 ## Verify the deployment
 
-Create or resume a Devin session and select the Outposts pool you deployed. Then
+Create or resume a Devin session and select the outpost you deployed. Then
 open the Modal application logs.
 
 <Check>

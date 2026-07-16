@@ -20,8 +20,8 @@ uv run python -m modal_devin COMMAND
 
 | Command | Purpose |
 | --- | --- |
-| `init` | Generate a Modal pool application, optionally creating its Devin pool, Modal Secret, and deployment |
-| `deploy` | Deploy a generated pool file through the current Python environment |
+| `init` | Generate a Modal outpost application, optionally creating its Devin outpost, Modal Secret, and deployment |
+| `deploy` | Deploy a generated outpost file through the current Python environment |
 | `doctor` | Check local credentials, secret presence, and runtime compatibility |
 | `--help`, `-h` | Display help |
 | `--version` | Display the installed application version |
@@ -32,16 +32,18 @@ uv run python -m modal_devin COMMAND
 modal-devin init [OPTIONS] [NAME]
 ```
 
-Generates one Python application in `POOLS_DIR`. In an interactive terminal, omitted inputs are prompted for. In scripts and CI, `NAME` is required.
+Generates one Python application in `OUTPOSTS_DIR`. In an interactive terminal, omitted inputs are prompted for. In scripts and CI, `NAME` is required.
 
 ### Arguments and options
 
 <ParamField path="NAME" type="string">
-  Human-readable worker pool name. It is also available as `--name`.
+  Human-readable Devin Outposts outpost name. It is also available as `--name`.
 </ParamField>
 
-<ParamField path="--pool-id" type="string">
-  Existing Devin Outposts pool ID. When omitted, `init` invokes `devin worker pool create`.
+<ParamField path="--outpost-id" type="string">
+  Existing Devin Outposts outpost ID. When omitted, `init` creates a new outpost by
+  calling the Devin Outposts API directly (`POST /opbeta/outposts`), using the
+  `DEVIN_OUTPOSTS_TOKEN` environment variable or an interactive prompt for the token.
 </ParamField>
 
 <ParamField path="--api-url" type="string" default="https://api.beta.devinenterprise.com">
@@ -53,7 +55,7 @@ Generates one Python application in `POOLS_DIR`. In an interactive terminal, omi
   generated functions. The Secret must expose `DEVIN_OUTPOSTS_TOKEN`.
 </ParamField>
 
-<ParamField path="--pools-dir" type="path" default="pools">
+<ParamField path="--outposts-dir" type="path" default="outposts">
   Directory for the generated Python file. Parent directories are created as needed.
 </ParamField>
 
@@ -67,17 +69,17 @@ The name becomes a safe lowercase Python module stem:
 
 - Non-ASCII-alphanumeric and non-underscore runs become `_`.
 - Leading and trailing underscores are removed.
-- A name beginning with a digit gains the `pool_` prefix.
+- A name beginning with a digit gains the `outpost_` prefix.
 - A name with no ASCII letter or digit is rejected.
 
-For example, `Frontend / Prod` becomes `pools/frontend_prod.py`.
+For example, `Frontend / Prod` becomes `outposts/frontend_prod.py`.
 
 ### Interactive setup
 
 Depending on answers and existing state, the wizard may:
 
 1. Run `modal setup`.
-2. Invoke `devin worker pool create NAME --api-url API_URL`.
+2. Create a new outpost by calling `POST /opbeta/outposts` on the Devin Outposts API directly.
 3. Create a named Modal Secret directly through the Modal SDK.
 4. Write the generated application.
 5. Deploy it with Modal.
@@ -97,36 +99,36 @@ subprocess argument or written to a local file.
 # Interactive setup
 uv run modal-devin init
 
-# Generate from an existing pool
-uv run modal-devin init my-pool --pool-id outpost_env-...
+# Generate from an existing outpost
+uv run modal-devin init my-outpost --outpost-id outpost_env-...
 
 # Generate to another directory without deploying
-uv run modal-devin init my-pool \
-  --pool-id outpost_env-... \
-  --pools-dir deployments \
+uv run modal-devin init my-outpost \
+  --outpost-id outpost_env-... \
+  --outposts-dir deployments \
   --no-deploy
 
 # Generate and deploy non-interactively
-uv run modal-devin init my-pool \
-  --pool-id outpost_env-... \
+uv run modal-devin init my-outpost \
+  --outpost-id outpost_env-... \
   --deploy
 ```
 
 ## `modal-devin deploy`
 
 ```text
-modal-devin deploy POOL-FILE
+modal-devin deploy OUTPOST-FILE
 ```
 
-<ParamField path="POOL-FILE" type="path" required>
-  Generated or handwritten Modal pool application to deploy.
+<ParamField path="OUTPOST-FILE" type="path" required>
+  Generated or handwritten Modal outpost application to deploy.
 </ParamField>
 
 The command deploys the selected application with the same project environment that
 runs `modal-devin`. A failed Modal deployment produces a nonzero exit status.
 
 ```bash
-uv run modal-devin deploy pools/my_pool.py
+uv run modal-devin deploy outposts/my_outpost.py
 ```
 
 ## `modal-devin doctor`
@@ -147,6 +149,7 @@ The command checks:
 | Local Modal token is valid | Exit status 1 |
 | Modal secrets can be listed | Exit status 1 |
 | Named Modal Secret exists | Exit status 1 |
-| Devin CLI is on `PATH` | Warning only |
 
-The Devin CLI is optional at runtime because an existing pool can be deployed without it.
+`doctor` doesn't check for a local Devin CLI: `init` creates outposts with a direct
+Devin Outposts API call, and the Devin CLI itself is only needed inside the deployed
+worker image at runtime, not on your machine.

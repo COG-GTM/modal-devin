@@ -8,13 +8,13 @@ Devin Outposts separates planning from execution. Devin's agent loop remains in
 Devin Cloud, while commands, file edits, and repository access happen on compute you
 operate.
 
-`modal-devin` supplies the orchestrator for Modal. It connects an Outposts pool to
+`modal-devin` supplies the orchestrator for Modal. It connects an outpost to
 isolated [Modal Sandboxes](https://modal.com/docs/guide/sandboxes) and manages each
 session from startup through cleanup.
 
 ```mermaid
 flowchart LR
-    D["Devin Cloud<br/>planning and session UI"] --> P["Outposts pool"]
+    D["Devin Cloud<br/>planning and session UI"] --> P["Outpost"]
     P --> O["modal-devin<br/>orchestrator on Modal"]
     O --> S["Modal Sandbox<br/>workspace and Devin worker"]
     S --> D
@@ -32,7 +32,7 @@ from an earlier suspended attempt.
 
 The generated Modal application is the orchestrator deployment. It:
 
-- Watches the configured Outposts pool for work.
+- Watches the configured outpost for work.
 - Starts one isolated Sandbox for an accepted session.
 - Runs the worker and streams its output to Modal logs.
 - Preserves the workspace when the session suspends.
@@ -46,7 +46,7 @@ behind the `Worker` API.
 
 The raw Devin credential is kept out of the main session environment. The workload
 can still use the limited Outposts capability required to serve its assigned session,
-so use least-privilege credentials and separate pools when trust requirements differ.
+so use least-privilege credentials and separate outposts when trust requirements differ.
 
 ## Network requirements
 
@@ -55,7 +55,7 @@ public IP, or a connection initiated from Devin Cloud.
 
 ## Operational model
 
-One generated application represents one pool deployment. Give deployments unique,
+One generated application represents one outpost deployment. Give deployments unique,
 durable names so their Modal resources and resumable work remain independent.
 
 <Card title="Session lifecycle" icon="route" href="/explanation/session-lifecycle" horizontal>

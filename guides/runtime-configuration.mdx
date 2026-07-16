@@ -12,7 +12,7 @@ mechanism.
 
 | Goal | Environment variable | Default |
 | --- | --- | ---: |
-| Check the pool more or less often | `MODAL_DEVIN_SCHEDULER_INTERVAL_SECONDS` | `30` |
+| Check the outpost more or less often | `MODAL_DEVIN_SCHEDULER_INTERVAL_SECONDS` | `30` |
 | Allow longer or shorter sessions | `MODAL_DEVIN_SESSION_TIMEOUT_SECONDS` | `1800` |
 | Change resumable-workspace retention | `MODAL_DEVIN_SNAPSHOT_TTL_SECONDS` | `2592000` |
 | Increase log detail | `MODAL_DEVIN_LOG_LEVEL` | `INFO` |
@@ -43,8 +43,8 @@ settings = WorkerSettings(
 )
 
 worker = Worker(
-    "my-pool",
-    pool_id="outpost_env-...",
+    "my-outpost",
+    outpost_id="outpost_env-...",
     settings=settings,
 )
 ```
@@ -78,7 +78,7 @@ documents filesystem snapshot retention and expiration behavior.
 - Use `None` in Python or `none` in the environment for indefinite retention.
 
 Keep the deployment active while relying on resumability, and remove persistent
-resources when a pool is retired.
+resources when an outpost is retired.
 
 <Note>
   Additional readiness, API, retry, and snapshot timing controls exist for unusual

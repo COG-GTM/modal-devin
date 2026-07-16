@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import runpy
-import subprocess
+import urllib.error
+from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -9,6 +11,43 @@ from unittest.mock import Mock
 import pytest
 
 from modal_devin import cli
+from modal_devin._client import OutpostsClient
+
+
+class Response:
+    def __init__(self, body):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return None
+
+    def read(self, size=-1):
+        return self.body if size < 0 else self.body[:size]
+
+
+class RecordingUrlOpen:
+    def __init__(self, bodies):
+        self.bodies = list(bodies)
+        self.requests = []
+
+    def __call__(self, request, *, timeout):
+        self.requests.append(request)
+        body = self.bodies.pop(0)
+        if isinstance(body, BaseException):
+            raise body
+        return Response(json.dumps(body).encode())
+
+
+def _fake_outposts_client(recorder):
+    """A cli.OutpostsClient replacement that routes real HTTP construction through a recorder."""
+
+    def factory(base_url, token, *, timeout):
+        return OutpostsClient(base_url, token, timeout=timeout, urlopen=recorder)
+
+    return factory
 
 
 def initialize(tmp_path, monkeypatch, **kwargs):
@@ -16,8 +55,8 @@ def initialize(tmp_path, monkeypatch, **kwargs):
     monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
     cli.init_worker(
         name="demo-pool",
-        pool_id="outpost_env-demo",
-        pools_dir=tmp_path,
+        outpost_id="outpost_env-demo",
+        outposts_dir=tmp_path,
         **kwargs,
     )
     return tmp_path / "demo_pool.py"
@@ -54,10 +93,10 @@ def test_generated_app_accepts_awkward_human_name_but_uses_safe_resources(tmp_pa
 
     cli.init_worker(
         name='bad/name "✨"',
-        pool_id='outpost_env-"quoted"',
+        outpost_id='outpost_env-"quoted"',
         api_url="https://api.example.com",
         secret_name="sec]ret",
-        pools_dir=tmp_path,
+        outposts_dir=tmp_path,
     )
 
     generated = tmp_path / "bad_name.py"
@@ -135,7 +174,6 @@ def test_deploy_propagates_modal_exit_code(monkeypatch):
 def test_doctor_reports_failed_required_check(monkeypatch):
     monkeypatch.setattr(cli, "_modal_is_configured", lambda: False)
     monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
-    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/devin")
 
     with pytest.raises(SystemExit) as exc_info:
         cli.doctor()
@@ -146,7 +184,6 @@ def test_doctor_reports_failed_required_check(monkeypatch):
 def test_doctor_success_path(monkeypatch):
     monkeypatch.setattr(cli, "_modal_is_configured", lambda: True)
     monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
-    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/devin")
 
     cli.doctor()
 
@@ -172,87 +209,123 @@ def test_secret_listing_uses_the_sdk(monkeypatch):
     assert cli._existing_secret_names() is None
 
 
+def _forbid_remote_outpost_calls(monkeypatch):
+    def boom(*args, **kwargs):
+        raise AssertionError("remote outpost API call")
+
+    monkeypatch.setattr(cli.OutpostsClient, "create_outpost", boom)
+    monkeypatch.setattr(cli.OutpostsClient, "delete_outpost", boom)
+
+
 def test_init_rejects_invalid_api_url_before_remote_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_interactive", lambda: False)
-
-    def run(*args, **kwargs):
-        raise AssertionError("remote command")
-
-    monkeypatch.setattr(cli.subprocess, "run", run)
+    _forbid_remote_outpost_calls(monkeypatch)
 
     with pytest.raises(SystemExit, match="api_url"):
         cli.init_worker(
             name="demo",
             api_url="file:///tmp/token",
-            pools_dir=tmp_path,
+            outposts_dir=tmp_path,
         )
 
 
 def test_init_rejects_empty_secret_name_before_remote_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_interactive", lambda: False)
-
-    def run(*args, **kwargs):
-        raise AssertionError("remote command")
-
-    monkeypatch.setattr(cli.subprocess, "run", run)
+    _forbid_remote_outpost_calls(monkeypatch)
 
     with pytest.raises(SystemExit, match="secret_name"):
         cli.init_worker(
             name="demo",
-            pool_id="outpost_env-demo",
+            outpost_id="outpost_env-demo",
             secret_name=" ",
-            pools_dir=tmp_path,
+            outposts_dir=tmp_path,
         )
 
 
 def test_init_refuses_to_overwrite_before_remote_changes(tmp_path, monkeypatch):
     (tmp_path / "demo.py").write_text("existing")
     monkeypatch.setattr(cli, "_interactive", lambda: False)
-
-    def run(*args, **kwargs):
-        raise AssertionError("remote command")
-
-    monkeypatch.setattr(cli.subprocess, "run", run)
+    _forbid_remote_outpost_calls(monkeypatch)
 
     with pytest.raises(SystemExit, match="already exists"):
-        cli.init_worker(name="demo", pools_dir=tmp_path)
+        cli.init_worker(name="demo", outposts_dir=tmp_path)
 
 
-def test_init_reports_devin_pool_creation_timeout(tmp_path, monkeypatch):
+def test_init_requires_a_token_to_create_a_new_outpost(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_interactive", lambda: False)
-    monkeypatch.setattr(
-        cli.subprocess,
-        "run",
-        lambda *args, **kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired("devin", 120)),
-    )
+    monkeypatch.delenv("DEVIN_OUTPOSTS_TOKEN", raising=False)
+    _forbid_remote_outpost_calls(monkeypatch)
 
-    with pytest.raises(SystemExit, match="120 seconds"):
-        cli.init_worker(name="demo", pools_dir=tmp_path)
+    with pytest.raises(SystemExit, match="DEVIN_OUTPOSTS_TOKEN is required"):
+        cli.init_worker(name="demo", outposts_dir=tmp_path)
 
 
-def test_pool_creation_keeps_the_token_out_of_process_arguments(tmp_path, monkeypatch):
+def test_init_creates_the_outpost_via_a_direct_api_call(tmp_path, monkeypatch):
     token = "super-secret-token"
     monkeypatch.setattr(cli, "_interactive", lambda: False)
     monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
     monkeypatch.setenv("DEVIN_OUTPOSTS_TOKEN", token)
 
-    def run(args, **kwargs):
-        assert args == [
-            "devin",
-            "worker",
-            "pool",
-            "create",
-            "demo",
-            "--api-url",
-            "https://api.beta.devinenterprise.com",
-        ]
-        assert all(token not in arg for arg in args)
-        assert kwargs["env"]["DEVIN_OUTPOSTS_TOKEN"] == token
-        return subprocess.CompletedProcess(args, 0, "outpost_env-demo\n", "")
+    recorder = RecordingUrlOpen([{"metadata": {"outpost_id": "outpost_env-demo"}}])
+    monkeypatch.setattr(cli, "OutpostsClient", _fake_outposts_client(recorder))
 
-    monkeypatch.setattr(cli.subprocess, "run", run)
+    cli.init_worker(name="demo", outposts_dir=tmp_path)
 
-    cli.init_worker(name="demo", pools_dir=tmp_path)
+    [request] = recorder.requests
+    assert request.full_url == "https://api.beta.devinenterprise.com/opbeta/outposts"
+    assert request.get_method() == "POST"
+    assert json.loads(request.data) == {
+        "name": "demo",
+        "platform": "linux",
+        "description": "",
+    }
+    assert request.get_header("Authorization") == f"Bearer {token}"
+
+    generated = (tmp_path / "demo.py").read_text()
+    assert "outpost_id='outpost_env-demo'" in generated
+
+
+def test_init_reports_an_outpost_api_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_interactive", lambda: False)
+    monkeypatch.setenv("DEVIN_OUTPOSTS_TOKEN", "super-secret-token")
+
+    error = urllib.error.HTTPError("url", 405, "Method Not Allowed", Message(), None)
+    recorder = RecordingUrlOpen([error])
+    monkeypatch.setattr(cli, "OutpostsClient", _fake_outposts_client(recorder))
+
+    with pytest.raises(SystemExit, match="405"):
+        cli.init_worker(name="demo", outposts_dir=tmp_path)
+
+
+def test_failed_write_rolls_back_a_newly_created_outpost(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_interactive", lambda: False)
+    monkeypatch.setenv("DEVIN_OUTPOSTS_TOKEN", "super-secret-token")
+
+    create_recorder = RecordingUrlOpen([{"metadata": {"outpost_id": "outpost_env-demo"}}])
+    delete_recorder = RecordingUrlOpen([{}])
+    recorders = iter([create_recorder, delete_recorder])
+    monkeypatch.setattr(
+        cli,
+        "OutpostsClient",
+        lambda base_url, token, *, timeout: OutpostsClient(
+            base_url, token, timeout=timeout, urlopen=next(recorders)
+        ),
+    )
+    monkeypatch.setattr(
+        Path,
+        "write_text",
+        lambda self, *a, **k: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    with pytest.raises(SystemExit, match="rolled back outpost outpost_env-demo"):
+        cli.init_worker(name="demo", outposts_dir=tmp_path)
+
+    [delete_request] = delete_recorder.requests
+    assert (
+        delete_request.full_url
+        == "https://api.beta.devinenterprise.com/opbeta/outposts/outpost_env-demo"
+    )
+    assert delete_request.get_method() == "DELETE"
 
 
 def test_cli_help_presents_the_project_level_workflow(capsys):

@@ -161,14 +161,14 @@ class WorkerConfig:
     """Identity and validated runtime configuration for one worker deployment."""
 
     name: str
-    pool_id: str
+    outpost_id: str
     api_url: str = DEFAULT_API_URL
 
     def __post_init__(self) -> None:
         if not self.name.strip():
             raise ConfigurationError("name must not be empty")
-        if not self.pool_id.strip():
-            raise ConfigurationError("pool_id must not be empty")
+        if not self.outpost_id.strip():
+            raise ConfigurationError("outpost_id must not be empty")
         object.__setattr__(self, "api_url", _validate_api_url(self.api_url))
 
     @property

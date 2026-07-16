@@ -294,7 +294,7 @@ def _run_claimed_session(
             "--session",
             session_id,
             "--pool",
-            config.pool_id,
+            config.outpost_id,
             "--acceptor-id",
             config.acceptor_id,
             env={
@@ -431,7 +431,7 @@ def dispatch_pending_sessions(
         timeout=settings.api_timeout_seconds,
     )
     try:
-        pending = client.pending_session_ids(config.pool_id)
+        pending = client.pending_session_ids(config.outpost_id)
     except OutpostsProtocolError:
         logger.exception("Outposts scheduler received an invalid response")
         raise

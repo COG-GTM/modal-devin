@@ -51,11 +51,11 @@ def make_client(recorder):
 def test_pending_sessions_are_typed_and_requests_have_standard_headers():
     recorder = RecordingUrlOpen([{"items": [{"metadata": {"session_id": "devin-1"}}]}])
 
-    result = make_client(recorder).pending_session_ids("pool with spaces")
+    result = make_client(recorder).pending_session_ids("outpost with spaces")
 
     assert result == ("devin-1",)
     [request] = recorder.requests
-    assert request.full_url.endswith("pool=pool+with+spaces&phase=pending")
+    assert request.full_url.endswith("outpost=outpost+with+spaces&phase=pending")
     assert request.get_header("Authorization") == "Bearer token-123"
     assert request.get_header("Accept") == "application/json"
     assert request.get_header("User-agent") == "modal-devin"
@@ -84,11 +84,11 @@ def test_claim_conflict_has_a_domain_exception():
 def test_http_and_transport_failures_have_domain_exceptions():
     server_error = urllib.error.HTTPError("url", 500, "Nope", Message(), None)
     with pytest.raises(OutpostsAPIError):
-        make_client(RecordingUrlOpen([server_error])).pending_session_ids("pool")
+        make_client(RecordingUrlOpen([server_error])).pending_session_ids("outpost")
 
     with pytest.raises(OutpostsAPIError):
         make_client(RecordingUrlOpen([urllib.error.URLError("offline")])).pending_session_ids(
-            "pool"
+            "outpost"
         )
 
 
@@ -105,7 +105,7 @@ def test_malformed_responses_raise_protocol_errors(body):
     recorder = RecordingUrlOpen([body])
 
     with pytest.raises(OutpostsProtocolError):
-        make_client(recorder).pending_session_ids("pool")
+        make_client(recorder).pending_session_ids("outpost")
 
 
 def test_status_distinguishes_successful_absence_from_request_failure():
@@ -171,4 +171,45 @@ def test_response_size_is_bounded():
     )
 
     with pytest.raises(OutpostsProtocolError, match="exceeded 1 MiB"):
-        client.pending_session_ids("pool")
+        client.pending_session_ids("outpost")
+
+
+def test_create_outpost_posts_to_opbeta_outposts_and_returns_the_id():
+    recorder = RecordingUrlOpen([{"metadata": {"outpost_id": "outpost_env-demo"}}])
+
+    outpost_id = make_client(recorder).create_outpost("demo")
+
+    assert outpost_id == "outpost_env-demo"
+    [request] = recorder.requests
+    assert request.full_url == "https://api.example.com/opbeta/outposts"
+    assert request.get_method() == "POST"
+    assert json.loads(request.data) == {
+        "name": "demo",
+        "platform": "linux",
+        "description": "",
+    }
+    assert request.get_header("Authorization") == "Bearer token-123"
+
+
+def test_create_outpost_raises_a_protocol_error_when_the_id_is_missing():
+    recorder = RecordingUrlOpen([{"metadata": {}}])
+
+    with pytest.raises(OutpostsProtocolError, match="outpost_id"):
+        make_client(recorder).create_outpost("demo")
+
+
+def test_delete_outpost_sends_a_quoted_delete_request():
+    recorder = RecordingUrlOpen([{}])
+
+    make_client(recorder).delete_outpost("outpost/env demo")
+
+    [request] = recorder.requests
+    assert request.full_url == "https://api.example.com/opbeta/outposts/outpost%2Fenv%20demo"
+    assert request.get_method() == "DELETE"
+    assert request.get_header("Authorization") == "Bearer token-123"
+
+
+def test_delete_outpost_raises_on_http_failure():
+    error = urllib.error.HTTPError("url", 404, "Not Found", Message(), None)
+    with pytest.raises(OutpostsAPIError):
+        make_client(RecordingUrlOpen([error])).delete_outpost("outpost_env-demo")

@@ -1,24 +1,24 @@
 ---
-title: Create a pool interactively
-description: Create a Devin Outposts pool and deploy its Modal orchestrator.
+title: Create an outpost interactively
+description: Create a Devin Outposts outpost and deploy its Modal orchestrator.
 icon: wand-magic-sparkles
 ---
 
-Use the setup wizard when you do not already have an Outposts pool. It can configure
-Modal, create the pool, store the Devin token, generate the application, and deploy
-it.
+Use the setup wizard when you do not already have an outpost. It can configure
+Modal, create the outpost, store the Devin token, generate the application, and
+deploy it.
 
 ## Before you begin
 
-Install the package and the Devin CLI:
+Install the package:
 
 ```bash
 uv add modal-devin
-curl -fsSL https://cli.devin.ai/install.sh | bash
 ```
 
 You also need a Devin organization with Outposts enabled and a token authorized to
-create and serve pools.
+create and serve outposts. The local Devin CLI is not required to run this wizard --
+`init` creates the outpost by calling the Devin Outposts API directly.
 
 <Steps>
   <Step title="Start the wizard">
@@ -33,21 +33,22 @@ create and serve pools.
   </Step>
 
   <Step title="Name the deployment">
-    Choose a durable name that describes the pool's role, such as
-    `frontend-production` or `gpu-builds`. The wizard uses it for the pool, generated
-    filename, and Modal resources.
+    Choose a durable name that describes the outpost's role, such as
+    `frontend-production` or `gpu-builds`. The wizard uses it for the outpost,
+    generated filename, and Modal resources.
   </Step>
 
   <Step title="Provide the Devin token">
-    The wizard uses the token to create the pool and offers to store it as a Modal
-    Secret. Input is hidden and the token is not written to the generated application.
+    The wizard uses the token to create the outpost and offers to store it as a
+    Modal Secret. Input is hidden and the token is not written to the generated
+    application.
   </Step>
 
   <Step title="Deploy">
     Accept **Deploy now?** or deploy the generated file later:
 
     ```bash
-    uv run modal-devin deploy pools/<generated_name>.py
+    uv run modal-devin deploy outposts/<generated_name>.py
     ```
   </Step>
 </Steps>
@@ -60,18 +61,19 @@ underlying problem is fixed.
 
 ## Automate setup
 
-For non-interactive use, provide a name and an existing pool ID:
+For non-interactive use, provide a name and an existing outpost ID:
 
 ```bash
-uv run modal-devin init ci-pool \
-  --pool-id outpost_env-... \
+uv run modal-devin init ci-outpost \
+  --outpost-id outpost_env-... \
   --secret-name ci-devin-token \
-  --pools-dir deployments \
+  --outposts-dir deployments \
   --no-deploy
 ```
 
-When `--pool-id` is omitted, `init` invokes the Devin CLI. In a non-interactive
-environment, make the expected Devin credential available to that command.
+When `--outpost-id` is omitted, `init` creates a new outpost by calling the Devin
+Outposts API directly. In a non-interactive environment, make sure
+`DEVIN_OUTPOSTS_TOKEN` is set so the request can be authorized.
 
 See the complete [`init` option reference](/reference/cli#modal-devin-init).
 

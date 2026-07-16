@@ -15,7 +15,7 @@ from modal_devin import worker as worker_module
 
 
 def test_worker_is_an_immutable_configured_runtime():
-    worker = Worker("Demo / Worker", pool_id="outpost_env-demo")
+    worker = Worker("Demo / Worker", outpost_id="outpost_env-demo")
 
     assert worker.name == "Demo / Worker"
     assert worker.app_name.startswith("modal-devin-demo-worker-")
@@ -41,7 +41,7 @@ def test_worker_exposes_domain_operations_not_an_application_builder():
 
 
 def test_base_image_remains_composable_until_prepare_image():
-    worker = Worker("demo", pool_id="pool")
+    worker = Worker("demo", outpost_id="outpost")
     base_image = worker.base_image(install_chrome=False, install_ffmpeg=False)
     customized = base_image.run_commands("echo custom")
 
@@ -53,7 +53,7 @@ def test_base_image_remains_composable_until_prepare_image():
 
 
 def test_controller_image_does_not_carry_worker_dependencies():
-    worker = Worker("demo", pool_id="pool")
+    worker = Worker("demo", outpost_id="outpost")
 
     image = worker.controller_image()
 
@@ -64,7 +64,7 @@ def test_controller_image_does_not_carry_worker_dependencies():
 def test_session_function_timeout_includes_startup_and_cleanup_margin():
     worker = Worker(
         "demo",
-        pool_id="pool",
+        outpost_id="outpost",
         settings=WorkerSettings(
             session_timeout_seconds=900,
             sandbox_ready_timeout_seconds=45,
@@ -80,7 +80,7 @@ def test_session_function_timeout_includes_startup_and_cleanup_margin():
 
 
 def test_run_session_delegates_runtime_mechanics(monkeypatch):
-    worker = Worker("demo", pool_id="pool")
+    worker = Worker("demo", outpost_id="outpost")
     app = modal.App("demo")
     image = modal.Image.debian_slim()
     execute = Mock()
@@ -102,7 +102,7 @@ def test_run_session_delegates_runtime_mechanics(monkeypatch):
 
 
 def test_dispatch_pending_sessions_accepts_a_plain_spawn_callable(monkeypatch):
-    worker = Worker("demo", pool_id="pool")
+    worker = Worker("demo", outpost_id="outpost")
     spawn = Mock()
     schedule = Mock()
     monkeypatch.setattr(worker_module, "_dispatch_pending_sessions", schedule)
@@ -128,7 +128,7 @@ def test_run_session_rejects_sandbox_options_that_break_invariants(monkeypatch, 
     monkeypatch.setenv("DEVIN_OUTPOSTS_TOKEN", "real-token")
 
     with pytest.raises(ConfigurationError, match="runtime invariants"):
-        cast(Any, Worker("demo", pool_id="pool").run_session)(
+        cast(Any, Worker("demo", outpost_id="outpost").run_session)(
             "devin-1",
             app=modal.App("demo"),
             image=modal.Image.debian_slim(),
@@ -138,7 +138,7 @@ def test_run_session_rejects_sandbox_options_that_break_invariants(monkeypatch, 
 
 def test_run_session_rejects_modal_command_arguments():
     with pytest.raises(TypeError, match="owns the Sandbox command"):
-        Worker("demo", pool_id="pool").run_session(
+        Worker("demo", outpost_id="outpost").run_session(
             "devin-1",
             "bash",
             app=modal.App("demo"),
@@ -150,28 +150,28 @@ def test_worker_reports_a_missing_function_secret_before_runtime_work(monkeypatc
     monkeypatch.delenv("DEVIN_OUTPOSTS_TOKEN", raising=False)
 
     with pytest.raises(ConfigurationError, match="attach the Devin token Modal Secret"):
-        Worker("demo", pool_id="pool").dispatch_pending_sessions(Mock())
+        Worker("demo", outpost_id="outpost").dispatch_pending_sessions(Mock())
 
 
 def test_worker_validates_public_runtime_objects():
     with pytest.raises(TypeError, match="settings must"):
-        Worker("demo", pool_id="pool", settings=cast(Any, {}))
+        Worker("demo", outpost_id="outpost", settings=cast(Any, {}))
     with pytest.raises(TypeError, match="image must"):
-        Worker("demo", pool_id="pool").prepare_image(cast(Any, object()))
+        Worker("demo", outpost_id="outpost").prepare_image(cast(Any, object()))
     with pytest.raises(TypeError, match="requires app="):
-        Worker("demo", pool_id="pool").run_session(
+        Worker("demo", outpost_id="outpost").run_session(
             "devin-1",
             app=cast(Any, object()),
             image=modal.Image.debian_slim(),
         )
     with pytest.raises(TypeError, match="requires image="):
-        Worker("demo", pool_id="pool").run_session(
+        Worker("demo", outpost_id="outpost").run_session(
             "devin-1",
             app=modal.App("demo"),
             image=cast(Any, object()),
         )
     with pytest.raises(TypeError, match="spawn_session must be callable"):
-        Worker("demo", pool_id="pool").dispatch_pending_sessions(cast(Any, object()))
+        Worker("demo", outpost_id="outpost").dispatch_pending_sessions(cast(Any, object()))
 
 
 def test_public_api_does_not_expose_runtime_wiring():

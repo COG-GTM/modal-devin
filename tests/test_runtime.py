@@ -491,7 +491,7 @@ class PollClient:
         self.claimed = []
         self.released = []
 
-    def pending_session_ids(self, pool_id):
+    def pending_session_ids(self, outpost_id):
         if isinstance(self.pending, BaseException):
             raise self.pending
         return self.pending

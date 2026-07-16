@@ -1,10 +1,10 @@
 ---
 title: Worker reference
-description: Configure one Outposts pool, build its image, and run its Modal entrypoints.
+description: Configure one outpost, build its image, and run its Modal entrypoints.
 icon: gears
 ---
 
-`Worker` is the supported runtime interface for one Devin Outposts pool.
+`Worker` is the supported runtime interface for one Devin Outposts outpost.
 
 ```python
 from modal_devin import Worker
@@ -16,7 +16,7 @@ from modal_devin import Worker
 Worker(
     name: str,
     *,
-    pool_id: str,
+    outpost_id: str,
     api_url: str = "https://api.beta.devinenterprise.com",
     settings: WorkerSettings | None = None,
 )
@@ -26,8 +26,8 @@ Worker(
   Durable name for this deployment. It must contain a non-whitespace character.
 </ParamField>
 
-<ParamField path="pool_id" type="string" required>
-  Devin Outposts pool ID.
+<ParamField path="outpost_id" type="string" required>
+  Devin Outposts outpost ID.
 </ParamField>
 
 <ParamField path="api_url" type="string" default="https://api.beta.devinenterprise.com">
@@ -44,7 +44,7 @@ Worker(
 Worker.from_env(
     name: str,
     *,
-    pool_id: str,
+    outpost_id: str,
     api_url: str = "https://api.beta.devinenterprise.com",
 ) -> Worker
 ```
@@ -135,7 +135,7 @@ worker.dispatch_pending_sessions(
 ) -> None
 ```
 
-Finds queued sessions for the configured pool and starts eligible Modal invocations.
+Finds queued sessions for the configured outpost and starts eligible Modal invocations.
 Pass the generated session function's asynchronous spawn method:
 
 ```python

@@ -18,7 +18,7 @@ integration details behind the following private boundaries:
 - `_runtime.py`: claim, dispatch, execution, and recovery state machine;
 - `images.py`: composable public image helpers and sidecar compatibility;
 - `worker.py`: the small public runtime and image API;
-- `templates/pool.py.tmpl`: the user-owned Modal application composition root.
+- `templates/outpost.py.tmpl`: the user-owned Modal application composition root.
 
 Generated applications should use Modal's native `App` and `@app.function`
 vocabulary. Do not expose sidecar image IDs, raw tokens, raw HTTP payloads, or

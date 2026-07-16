@@ -11,7 +11,7 @@ from modal_devin._config import WorkerConfig
 def test_worker_config_derives_safe_bounded_modal_names():
     config = WorkerConfig(
         name="Production / Platform ✨ " + "x" * 100,
-        pool_id="outpost_env-demo",
+        outpost_id="outpost_env-demo",
     )
 
     for value in (
@@ -27,11 +27,11 @@ def test_worker_config_derives_safe_bounded_modal_names():
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"name": "", "pool_id": "pool"}, "name"),
-        ({"name": "worker", "pool_id": ""}, "pool_id"),
-        ({"name": "worker", "pool_id": "pool", "api_url": "file:///tmp/x"}, "api_url"),
+        ({"name": "", "outpost_id": "outpost"}, "name"),
+        ({"name": "worker", "outpost_id": ""}, "outpost_id"),
+        ({"name": "worker", "outpost_id": "outpost", "api_url": "file:///tmp/x"}, "api_url"),
         (
-            {"name": "worker", "pool_id": "pool", "api_url": "https://u:p@example.com"},
+            {"name": "worker", "outpost_id": "outpost", "api_url": "https://u:p@example.com"},
             "credentials",
         ),
     ],

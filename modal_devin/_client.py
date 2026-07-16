@@ -168,8 +168,22 @@ class OutpostsClient:
         encoded = urllib.parse.quote(session_id, safe="")
         return f"/opbeta/outposts/devins/{encoded}/{action}"
 
-    def pending_session_ids(self, pool_id: str) -> tuple[str, ...]:
-        query = urllib.parse.urlencode({"pool": pool_id, "phase": "pending"})
+    def create_outpost(self, name: str, *, platform: str = "linux", description: str = "") -> str:
+        response = self._request(
+            "POST",
+            "/opbeta/outposts",
+            {"name": name, "platform": platform, "description": description},
+        )
+        return _required_nested_string(
+            response, "metadata", "outpost_id", context="outpost create"
+        )
+
+    def delete_outpost(self, outpost_id: str) -> None:
+        encoded = urllib.parse.quote(outpost_id, safe="")
+        self._request("DELETE", f"/opbeta/outposts/{encoded}")
+
+    def pending_session_ids(self, outpost_id: str) -> tuple[str, ...]:
+        query = urllib.parse.urlencode({"outpost": outpost_id, "phase": "pending"})
         response = self._request("GET", f"/opbeta/outposts/devins?{query}")
         session_ids: list[str] = []
         for index, item in enumerate(_items(response)):

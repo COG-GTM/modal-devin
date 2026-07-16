@@ -4,7 +4,7 @@ description: Check health, follow sessions, redeploy changes, and preserve resum
 icon: gauge-high
 ---
 
-The generated Modal application is the operational unit for one Outposts pool.
+The generated Modal application is the operational unit for one outpost.
 
 ## Check local prerequisites
 
@@ -21,7 +21,7 @@ Use the Modal dashboard or the
 [`modal app logs`](https://modal.com/docs/cli/latest/app#modal-app-logs) command. A
 healthy session follows this observable path:
 
-1. A session assigned to the pool starts a Modal invocation.
+1. A session assigned to the outpost starts a Modal invocation.
 2. The invocation logs show the Devin worker starting.
 3. Worker output is prefixed with the Devin session ID.
 4. The invocation finishes, or preserves the workspace when the session suspends.
@@ -30,17 +30,17 @@ Common outcomes:
 
 | What you see | What it usually means |
 | --- | --- |
-| No invocation starts | The pool, credential, deployment, or queue needs attention |
+| No invocation starts | The outpost, credential, deployment, or queue needs attention |
 | An invocation exits immediately without an error | Another worker already accepted that session |
 | `WorkerExitedError` | The Devin worker returned a nonzero status; inspect the preceding output |
 | `SessionStatusUnknownError` | Final state could not be confirmed; recovery data was preserved when possible |
 
 ## Deploy configuration changes
 
-Edit the generated pool file and redeploy it:
+Edit the generated outpost file and redeploy it:
 
 ```bash
-uv run modal-devin deploy pools/my_pool.py
+uv run modal-devin deploy outposts/my_outpost.py
 ```
 
 Do not rerun `init` over an existing file; it intentionally refuses to overwrite

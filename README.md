@@ -4,7 +4,7 @@ Run Devin Outposts sessions on Modal.
 
 Devin's planning remains in Devin Cloud while commands, file edits, and repository
 access run in isolated [Modal Sandboxes](https://modal.com/docs/guide/sandboxes) that
-you control. `modal-devin` provides the orchestrator: it watches your Outposts pool,
+you control. `modal-devin` provides the orchestrator: it watches your outpost,
 starts a Sandbox for each session, preserves suspended work, and cleans up when the
 session ends.
 
@@ -36,18 +36,18 @@ public IP.
 
 ## Quick start
 
-You need Python 3.11 or newer, a configured Modal account, an Outposts pool ID, and
-a Devin token authorized for that pool.
+You need Python 3.11 or newer, a configured Modal account, an outpost ID, and
+a Devin token authorized for that outpost.
 
 ```bash
 uv add modal-devin
 uv run modal setup
-uv run modal-devin init my-pool --pool-id outpost_env-...
+uv run modal-devin init my-outpost --outpost-id outpost_env-...
 uv run modal-devin doctor
-uv run modal-devin deploy pools/my_pool.py
+uv run modal-devin deploy outposts/my_outpost.py
 ```
 
-Run `uv run modal-devin init` without arguments to create a pool interactively.
+Run `uv run modal-devin init` without arguments to create an outpost interactively.
 
 The generated Python file is your Modal application. Edit it to choose the workspace
 image, secrets, compute, region, retry policy, and schedule. The library manages the

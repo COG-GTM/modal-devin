@@ -34,7 +34,7 @@ public IP.
 
 ```mermaid
 flowchart LR
-    D["Devin Cloud"] --> P["Your Outposts pool"]
+    D["Devin Cloud"] --> P["Your outpost"]
     P --> O["modal-devin orchestrator"]
     O --> S["Modal Sandbox"]
     S --> W["Devin worker and your workspace"]
@@ -43,11 +43,11 @@ flowchart LR
 ## Choose your path
 
 <Columns cols={2}>
-  <Card title="Deploy an existing pool" icon="play" href="/tutorials/first-worker">
-    Go from a pool ID to a verified Modal deployment.
+  <Card title="Deploy an existing outpost" icon="play" href="/tutorials/first-worker">
+    Go from an outpost ID to a verified Modal deployment.
   </Card>
-  <Card title="Create a new pool" icon="wand-magic-sparkles" href="/tutorials/create-a-pool">
-    Create the pool, credential, and application interactively.
+  <Card title="Create a new outpost" icon="wand-magic-sparkles" href="/tutorials/create-an-outpost">
+    Create the outpost, credential, and application interactively.
   </Card>
   <Card title="Build the workspace" icon="code" href="/tutorials/custom-workspace">
     Add project source and tools to every new session.
@@ -77,8 +77,8 @@ application.
 - Python 3.11 or newer.
 - A Modal account with locally configured credentials.
 - A Devin organization with Outposts enabled.
-- An existing Outposts pool ID, or the Devin CLI to create one.
-- A Devin token authorized to manage the pool and serve its sessions.
+- An existing outpost ID, or the Devin CLI to create one.
+- A Devin token authorized to manage the outpost and serve its sessions.
 
 <Card title="Deploy your first worker" icon="arrow-right" href="/tutorials/first-worker" horizontal>
   Follow the shortest path from installation to a verified deployment.

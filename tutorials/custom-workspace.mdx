@@ -12,11 +12,11 @@ new session. Customize that block with the normal
 
 You need a deployed `modal-devin` application from
 [Deploy your first worker](/tutorials/first-worker) or
-[Create a pool interactively](/tutorials/create-a-pool).
+[Create an outpost interactively](/tutorials/create-an-outpost).
 
 <Steps>
-  <Step title="Open the generated pool file">
-    Find this block in `pools/my_pool.py`:
+  <Step title="Open the generated outpost file">
+    Find this block in `outposts/my_outpost.py`:
 
     ```python
     base_image = (
@@ -57,7 +57,7 @@ You need a deployed `modal-devin` application from
 
   <Step title="Deploy the workspace">
     ```bash
-    uv run modal-devin deploy pools/my_pool.py
+    uv run modal-devin deploy outposts/my_outpost.py
     ```
 
     New sessions use the new image. A resumed session continues from its preserved

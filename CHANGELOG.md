@@ -52,6 +52,16 @@ and uses semantic versioning.
   all pending sessions are still attempted before dispatch errors are reported.
 - Devin CLI installation failures now stop worker image builds at the failing
   installer step.
+- `pool`/`pool_id` terminology is renamed to `outpost`/`outpost_id` throughout the
+  public API, CLI, and generated files, matching Devin Outposts' current API
+  vocabulary: `Worker(pool_id=...)` is now `Worker(outpost_id=...)`, the `init`
+  `--pool-id` flag is now `--outpost-id`, and the default `init` output directory
+  is `outposts/` instead of `pools/`.
+- `modal-devin init` now creates and rolls back outposts with a direct call to the
+  Devin Outposts API (`POST`/`DELETE /opbeta/outposts`) instead of shelling out to
+  the `devin` CLI's `worker pool create`. The local `devin` CLI is no longer
+  required to run `init`, `deploy`, or `doctor` -- it's still required inside the
+  deployed worker image at runtime.
 
 ### Removed
 
@@ -60,6 +70,21 @@ and uses semantic versioning.
   `SessionRunner`, and `OutpostPoolConfig` surface.
 - The redundant `modal-devin outpost` command group.
 - The `clone_private_repo()` image-build helper.
+
+### Fixed
+
+- `modal-devin init`'s outpost creation no longer returns `405 Method Not Allowed`
+  against the Devin Outposts beta API: the `devin` CLI's `worker pool create`
+  subcommand targeted a route the API backend had already retired in favor of
+  `POST /opbeta/outposts`.
+- The `init` rollback path's outpost-deletion request was hitting a nonexistent URL
+  (`/outposts/pools/{id}`, missing the `/opbeta` prefix) and silently failing every
+  time; it now calls the correct `DELETE /opbeta/outposts/{outpost_id}`.
+- Worker image builds no longer fail on the `devin` CLI's own `install.sh`, whose last
+  step unconditionally runs an interactive `devin setup` OAuth wizard that always
+  fails without a TTY. The install step now succeeds or fails based on whether the
+  `devin` binary is actually present and executable afterward, not on that wizard's
+  incidental exit code -- a genuinely failed install still fails the build.
 
 ### Security
 

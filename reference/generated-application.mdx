@@ -11,19 +11,19 @@ maintain and deploy the generated file like other application code.
 
 ```python
 worker = Worker.from_env(
-    "my-pool",
-    pool_id="outpost_env-...",
+    "my-outpost",
+    outpost_id="outpost_env-...",
     api_url="https://api.beta.devinenterprise.com",
 )
 
 app = modal.App(
-    "modal-devin-my-pool",
+    "modal-devin-my-outpost",
     tags={"service": "modal-devin"},
 )
 devin_secret = modal.Secret.from_name("devin-outposts-token")
 ```
 
-The worker connects the deployment to one Outposts pool. The
+The worker connects the deployment to one outpost. The
 [Modal App](https://modal.com/docs/guide/apps) name, tags, and
 [Secret](https://modal.com/docs/guide/secrets) name belong to your deployment and may
 be changed.

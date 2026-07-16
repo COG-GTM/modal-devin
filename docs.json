@@ -22,7 +22,7 @@
         "icon": "graduation-cap",
         "pages": [
           "tutorials/first-worker",
-          "tutorials/create-a-pool",
+          "tutorials/create-an-outpost",
           "tutorials/custom-workspace"
         ]
       },
@@ -33,7 +33,7 @@
           "guides/customize-image",
           "guides/resources-and-regions",
           "guides/runtime-configuration",
-          "guides/multiple-pools",
+          "guides/multiple-outposts",
           "guides/operate-a-worker",
           "guides/troubleshooting"
         ]

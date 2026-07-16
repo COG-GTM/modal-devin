@@ -94,14 +94,14 @@ class Worker:
         self,
         name: str,
         *,
-        pool_id: str,
+        outpost_id: str,
         api_url: str = DEFAULT_API_URL,
         settings: WorkerSettings | None = None,
     ) -> None:
         if settings is not None and not isinstance(settings, WorkerSettings):  # type: ignore[unreachable]
             raise TypeError(f"settings must be WorkerSettings, got {type(settings).__name__}")
         object.__setattr__(
-            self, "_config", WorkerConfig(name=name, pool_id=pool_id, api_url=api_url)
+            self, "_config", WorkerConfig(name=name, outpost_id=outpost_id, api_url=api_url)
         )
         object.__setattr__(
             self,
@@ -114,13 +114,13 @@ class Worker:
         cls,
         name: str,
         *,
-        pool_id: str,
+        outpost_id: str,
         api_url: str = DEFAULT_API_URL,
     ) -> Self:
         """Create a worker with operational settings read from ``MODAL_DEVIN_*``."""
         return cls(
             name,
-            pool_id=pool_id,
+            outpost_id=outpost_id,
             api_url=api_url,
             settings=WorkerSettings.from_env(),
         )

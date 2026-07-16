@@ -10,6 +10,7 @@ import pytest
 from modal_devin import ModalCompatibilityError
 from modal_devin.images import (
     _CADDYFILE,
+    _DEVIN_BIN,
     _DEVIN_CLI_INSTALL,
     _SIDECAR_RECIPE_DIGEST,
     _controller_image,
@@ -30,6 +31,13 @@ def test_worker_image_remains_composable():
 
 def test_devin_installer_does_not_suppress_failures():
     assert "|| true" not in _DEVIN_CLI_INSTALL
+
+
+def test_devin_installer_verifies_the_binary_instead_of_trusting_install_shs_exit_code():
+    # install.sh's own last step runs `devin setup`, an interactive OAuth wizard that
+    # always fails without a TTY (as in an image build) even when the binary installed
+    # fine. The install command must still fail if the binary is genuinely missing.
+    assert _DEVIN_CLI_INSTALL.endswith(f"; test -x {_DEVIN_BIN}")
 
 
 def test_controller_image_is_small_and_contains_the_runtime_source():

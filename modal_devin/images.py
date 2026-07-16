@@ -11,9 +11,15 @@ import modal
 
 from modal_devin._exceptions import ModalCompatibilityError
 
-# Intentionally left unpinned for now. Supply-chain reproducibility is tracked separately.
-_DEVIN_CLI_INSTALL = "curl -fsSL https://cli.devin.ai/install.sh | bash"
 _DEVIN_BIN = "/root/.local/bin/devin"
+# Intentionally left unpinned for now. Supply-chain reproducibility is tracked separately.
+# install.sh's own last step unconditionally runs `devin setup`, an interactive OAuth
+# wizard that always fails without a TTY (as in this build). Workers authenticate via
+# DEVIN_OUTPOSTS_TOKEN instead, so that failure is harmless -- but it's still the exit
+# code of the whole `curl | bash` pipeline. Chaining the executable check with `;` makes
+# "the binary actually works" the real success signal instead, so a genuine install
+# failure (bad download, missing binary, ...) still fails the build.
+_DEVIN_CLI_INSTALL = f"curl -fsSL https://cli.devin.ai/install.sh | bash; test -x {_DEVIN_BIN}"
 
 _CADDYFILE = """\
 {
@@ -84,7 +90,6 @@ def _worker_image(
         modal.Image.debian_slim(python_version=python_version)
         .apt_install("git", "curl", "ca-certificates", "tar")
         .run_commands(_DEVIN_CLI_INSTALL)
-        .run_commands(f"test -x {_DEVIN_BIN}")
         .run_commands("mkdir -p /root/workspace")
     )
     if install_ffmpeg:

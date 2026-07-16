@@ -6,11 +6,8 @@ requires explicit values in scripts and CI.
 
 import os
 import re
-import shutil
 import subprocess
 import sys
-import urllib.error
-import urllib.request
 from collections import deque
 from collections.abc import Sequence
 from importlib.resources import files
@@ -26,12 +23,13 @@ from rich.markup import escape
 from rich.prompt import Confirm, Prompt
 from rich.text import Text
 
-from modal_devin import ConfigurationError, Worker
+from modal_devin import ConfigurationError, OutpostsAPIError, Worker
+from modal_devin._client import OutpostsClient
 from modal_devin._config import DEFAULT_API_TIMEOUT_SECONDS, DEFAULT_API_URL
 
 app = cyclopts.App(name="modal-devin")
 
-TEMPLATE = files("modal_devin").joinpath("templates", "pool.py.tmpl")
+TEMPLATE = files("modal_devin").joinpath("templates", "outpost.py.tmpl")
 DEVIN_TOKEN_URL = "https://docs.devin.ai/api-reference/authentication"
 _MODULE_STEM_RE = re.compile(r"[^0-9A-Za-z_]+")
 
@@ -51,20 +49,20 @@ class _PromptKwargs(TypedDict, total=False):
     stream: TextIO
 
 
-PoolNameArg = Annotated[
+OutpostNameArg = Annotated[
     str,
-    cyclopts.Parameter(help="Human-readable Devin worker pool name.", show_default=False),
+    cyclopts.Parameter(help="Human-readable Devin Outposts outpost name.", show_default=False),
 ]
-PoolIdOption = Annotated[
+OutpostIdOption = Annotated[
     str,
     cyclopts.Parameter(
-        help="Existing Devin Outposts pool id. Omit to create a pool with the Devin CLI.",
+        help="Existing Devin Outposts outpost id. Omit to create a new outpost.",
         show_default=False,
     ),
 ]
-PoolFileArg = Annotated[
+OutpostFileArg = Annotated[
     Path,
-    cyclopts.Parameter(help="Generated Modal pool file to deploy."),
+    cyclopts.Parameter(help="Generated Modal outpost file to deploy."),
 ]
 ApiUrlOption = Annotated[
     str,
@@ -74,13 +72,13 @@ SecretNameOption = Annotated[
     str,
     cyclopts.Parameter(help="Modal Secret name containing DEVIN_OUTPOSTS_TOKEN."),
 ]
-PoolsDirOption = Annotated[
+OutpostsDirOption = Annotated[
     Path,
-    cyclopts.Parameter(help="Directory where the generated Modal pool file is written."),
+    cyclopts.Parameter(help="Directory where the generated Modal outpost file is written."),
 ]
 DeployOption = Annotated[
     bool | None,
-    cyclopts.Parameter(help="Deploy the generated pool file after writing it.", show_default=False),
+    cyclopts.Parameter(help="Deploy the generated outpost file after writing it.", show_default=False),
 ]
 
 
@@ -208,8 +206,8 @@ def _run_with_tail(argv: Sequence[str], window: int = 10) -> int:
     return proc.returncode
 
 
-def _modal_deploy(pool_file: Path) -> int:
-    argv = [sys.executable, "-m", "modal", "deploy", str(pool_file)]
+def _modal_deploy(outpost_file: Path) -> int:
+    argv = [sys.executable, "-m", "modal", "deploy", str(outpost_file)]
     if _interactive():
         return _run_with_tail(argv)
     return subprocess.run(argv).returncode
@@ -232,20 +230,19 @@ def _create_modal_secret(secret_name: str, token: str) -> None:
     )
 
 
-def _delete_pool(api_url: str, token: str | None, pool_id: str) -> bool:
-    """Best-effort rollback of a pool `create` just registered with Devin, for when a later
-    (local, avoidable) step fails before the pool file is on disk -- otherwise the command exits
-    having created a live pool with no local record of it. Returns whether the delete succeeded;
+def _delete_outpost(api_url: str, token: str | None, outpost_id: str) -> bool:
+    """Best-effort rollback of an outpost `create` just registered with Devin, for when a later
+    (local, avoidable) step fails before the outpost file is on disk -- otherwise the command exits
+    having created a live outpost with no local record of it. Returns whether the delete succeeded;
     callers should print manual cleanup instructions on False."""
     if not token:
         return False
-    req = urllib.request.Request(f"{api_url.rstrip('/')}/outposts/pools/{pool_id}", method="DELETE")
-    req.add_header("Authorization", f"Bearer {token}")
+    client = OutpostsClient(api_url, token, timeout=DEFAULT_API_TIMEOUT_SECONDS)
     try:
-        with urllib.request.urlopen(req, timeout=DEFAULT_API_TIMEOUT_SECONDS):
-            return True
-    except urllib.error.URLError:
+        client.delete_outpost(outpost_id)
+    except OutpostsAPIError:
         return False
+    return True
 
 
 def _modal_is_configured() -> bool:
@@ -261,7 +258,7 @@ def _module_stem(name: str) -> str:
     if not stem:
         raise SystemExit("NAME must contain at least one ASCII letter or digit")
     if stem[0].isdigit():
-        stem = f"pool_{stem}"
+        stem = f"outpost_{stem}"
     return stem
 
 
@@ -270,24 +267,24 @@ def _python_literal(value: str) -> str:
 
 
 @app.command
-def deploy(pool_file: PoolFileArg) -> None:
-    """Deploy a generated Modal pool file using modal-devin's Python environment."""
-    returncode = _modal_deploy(pool_file)
+def deploy(outpost_file: OutpostFileArg) -> None:
+    """Deploy a generated Modal application using modal-devin's Python environment."""
+    returncode = _modal_deploy(outpost_file)
     if returncode != 0:
         raise SystemExit(returncode)
 
 
 @app.command(name="init")
 def init_worker(
-    name: PoolNameArg = "",
+    name: OutpostNameArg = "",
     *,
-    pool_id: PoolIdOption = "",
+    outpost_id: OutpostIdOption = "",
     api_url: ApiUrlOption = DEFAULT_API_URL,
     secret_name: SecretNameOption = "devin-outposts-token",
-    pools_dir: PoolsDirOption = Path("pools"),
+    outposts_dir: OutpostsDirOption = Path("outposts"),
     deploy: DeployOption = None,
 ) -> None:
-    """Scaffold a Modal pool file for Devin Outposts."""
+    """Scaffold a Modal application for Devin Outposts."""
     interactive = _interactive()
 
     if interactive and not _modal_is_configured() and _confirm("Set up Modal now?", default=True):
@@ -298,7 +295,7 @@ def init_worker(
     while not name:
         if not interactive:
             raise SystemExit("NAME is required (pass it as an argument, or run interactively)")
-        name = _ask("What is your pool named?")
+        name = _ask("What is your outpost named?")
 
     if not secret_name.strip():
         raise SystemExit("secret_name must not be empty")
@@ -306,7 +303,7 @@ def init_worker(
     try:
         validated_worker = Worker(
             name,
-            pool_id=pool_id or "pending",
+            outpost_id=outpost_id or "pending",
             api_url=api_url,
         )
     except ConfigurationError as error:
@@ -314,72 +311,60 @@ def init_worker(
 
     # Resolve and validate the output path *before* creating anything remotely, so the one
     # foreseeable, locally-checkable failure (name collision) never even reaches the API.
-    # Anything that fails after that point (mkdir, template write, ...) rolls the pool back via
-    # DELETE /outposts/pools/{pool_id} instead, so `create` doesn't leave a live pool behind with
-    # no local file to show for it.
-    out_dir = pools_dir
+    # Anything that fails after that point (mkdir, template write, ...) rolls the outpost back via
+    # DELETE /opbeta/outposts/{outpost_id} instead, so `create` doesn't leave a live outpost behind
+    # with no local file to show for it.
+    out_dir = outposts_dir
     out_path = out_dir / f"{_module_stem(name)}.py"
     if out_path.exists():
         raise SystemExit(f"{out_path} already exists, not overwriting")
 
     token = None  # the Devin Service User Key (env var DEVIN_OUTPOSTS_TOKEN), if we get one
-    created_pool_id = None  # set once we register a *new* pool -- rolled back if a later step fails
+    created_outpost_id = None  # set once we register a *new* outpost -- rolled back if a later step fails
 
-    if not pool_id:
+    if not outpost_id:
         token = os.environ.get("DEVIN_OUTPOSTS_TOKEN")
         if not token and interactive:
             _console.print(f"[dim]Grab a Devin Service User Key: {DEVIN_TOKEN_URL}[/dim]")
             token = _ask("Devin Service User Key", password=True)
-
-        _step_start(f"Running devin worker pool create {name}...")
-        env = {**os.environ, "DEVIN_OUTPOSTS_TOKEN": token} if token else None
-        try:
-            result = subprocess.run(
-                ["devin", "worker", "pool", "create", name, "--api-url", api_url],
-                capture_output=True,
-                text=True,
-                env=env,
-                timeout=120,
-            )
-        except FileNotFoundError as e:
-            _step_failed("devin worker pool create failed")
+        if not token:
             raise SystemExit(
-                "`devin` CLI not found on PATH -- install it with:\n"
-                "  curl -fsSL https://cli.devin.ai/install.sh | bash"
-            ) from e
-        except subprocess.TimeoutExpired as error:
-            _step_failed("devin worker pool create timed out")
-            raise SystemExit("Devin pool creation did not finish within 120 seconds") from error
-        if result.returncode != 0:
-            _step_failed(f"devin worker pool create {name} failed")
-            raise SystemExit(result.stderr)
-        pool_id = result.stdout.strip()
-        if not pool_id:
-            raise SystemExit("Devin CLI succeeded without returning a pool ID")
-        created_pool_id = pool_id
+                "DEVIN_OUTPOSTS_TOKEN is required to create a new outpost "
+                "(set the env var, or provide it when prompted)"
+            )
+
+        _step_start(f"Creating outpost {name}...")
+        client = OutpostsClient(api_url, token, timeout=DEFAULT_API_TIMEOUT_SECONDS)
+        try:
+            outpost_id = client.create_outpost(name)
+        except OutpostsAPIError as error:
+            _step_failed(f"outpost create {name} failed")
+            raise SystemExit(str(error)) from error
+        created_outpost_id = outpost_id
         _step_done(
-            f"Created pool [bold]{escape(name)}[/bold] [dim]→[/dim] [cyan]{escape(pool_id)}[/cyan]"
+            f"Created outpost [bold]{escape(name)}[/bold] [dim]→[/dim] "
+            f"[cyan]{escape(outpost_id)}[/cyan]"
         )
 
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
         generated = Template(TEMPLATE.read_text(encoding="utf-8")).substitute(
             app_name=_python_literal(validated_worker.app_name),
-            pool_name=_python_literal(name),
-            pool_id=_python_literal(pool_id),
+            outpost_name=_python_literal(name),
+            outpost_id=_python_literal(outpost_id),
             api_url=_python_literal(api_url),
             secret_name=_python_literal(secret_name),
         )
         out_path.write_text(generated, encoding="utf-8")
     except OSError as e:
-        if created_pool_id and _delete_pool(api_url, token, created_pool_id):
+        if created_outpost_id and _delete_outpost(api_url, token, created_outpost_id):
             raise SystemExit(
-                f"Failed to write {out_path}, rolled back pool {created_pool_id}: {e}"
+                f"Failed to write {out_path}, rolled back outpost {created_outpost_id}: {e}"
             ) from e
-        elif created_pool_id:
+        elif created_outpost_id:
             raise SystemExit(
                 f"Failed to write {out_path}: {e}\n"
-                f"Also failed to roll back pool {name} ({created_pool_id}) -- "
+                f"Also failed to roll back outpost {name} ({created_outpost_id}) -- "
                 f"delete it from the Devin dashboard or with the Outposts API."
             ) from e
         raise SystemExit(f"Failed to write {out_path}: {e}") from e
@@ -441,7 +426,7 @@ def doctor(
     *,
     secret_name: SecretNameOption = "devin-outposts-token",
 ) -> None:
-    """Check local Modal, Devin, and worker-runtime prerequisites."""
+    """Check local Modal and worker-runtime prerequisites."""
     failures = 0
 
     if hasattr(modal.Sandbox, "_experimental_sidecars"):
@@ -465,12 +450,6 @@ def doctor(
     else:
         _step_failed(f"Modal secret {escape(secret_name)} does not exist")
         failures += 1
-
-    devin_path = shutil.which("devin")
-    if devin_path:
-        _done(f"Devin CLI found at [cyan]{escape(devin_path)}[/cyan]")
-    else:
-        _console.print("[yellow]![/yellow] Devin CLI not found (only needed to create new pools)")
 
     if failures:
         raise SystemExit(1)

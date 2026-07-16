@@ -9,7 +9,7 @@ from modal_devin import Worker
 
 worker = Worker(
     "modal-devin-integration",
-    pool_id="unused-in-integration-test",
+    outpost_id="unused-in-integration-test",
 )
 app = modal.App("modal-devin-integration")
 secret = modal.Secret.from_dict({"DEVIN_OUTPOSTS_TOKEN": "integration-placeholder"})
