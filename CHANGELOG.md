@@ -5,6 +5,8 @@ and uses semantic versioning.
 
 ## Unreleased
 
+## 0.1.3 - 2026-07-16
+
 ### Fixed
 
 - Workers no longer pre-claim a session and then hand it to `devin worker start`,
