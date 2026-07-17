@@ -4,9 +4,20 @@
   "name": "modal-devin",
   "description": "Run secure, resumable Devin Outposts workers on Modal.",
   "colors": {
-    "primary": "#3730A3",
-    "light": "#A5B4FC",
-    "dark": "#6366F1"
+    "primary": "#09AF58",
+    "light": "#80EE64",
+    "dark": "#09AF58"
+  },
+  "logo": {
+    "light": "/assets/modal-logo-light.svg",
+    "dark": "/assets/modal-logo-dark.svg",
+    "href": "/"
+  },
+  "background": {
+    "color": {
+      "light": "#FFFFFF",
+      "dark": "#161616"
+    }
   },
   "navigation": {
     "groups": [
