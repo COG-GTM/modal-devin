@@ -30,8 +30,9 @@ limit, and billing semantics.
 ## Configure orchestration policy
 
 The surrounding Modal function manages the session lifecycle. Use its decorator for
-[retry](https://modal.com/docs/guide/retries) and
-[placement](https://modal.com/docs/guide/region-selection) policy when needed:
+[placement](https://modal.com/docs/guide/region-selection) policy when needed. Add
+Modal function retries only deliberately: each retry is a fresh claim attempt with a
+new acceptor identity.
 
 ```python
 @app.function(
@@ -39,7 +40,6 @@ The surrounding Modal function manages the session lifecycle. Use its decorator 
     image=image,
     secrets=[devin_secret],
     timeout=worker.session_function_timeout_seconds,
-    retries=2,
     region="eu-west",
 )
 def session(session_id: str) -> None:

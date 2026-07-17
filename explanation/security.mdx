@@ -47,7 +47,8 @@ internal services the session is allowed to reach.
 
 When final session state is unavailable or unrecognized, `modal-devin` does not assume
 the work completed successfully. It attempts to preserve the filesystem and reports a
-failure so the condition remains visible to Modal retries and monitoring.
+failure so the condition remains visible to monitoring while the durable recovery
+snapshot remains available to a later claim attempt.
 
 ## Supply-chain considerations
 

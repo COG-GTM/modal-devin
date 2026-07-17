@@ -6,7 +6,9 @@ import hashlib
 import logging
 import math
 import time
+import uuid
 from collections.abc import Callable, Iterable, Mapping
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import modal
@@ -17,9 +19,9 @@ from modal_devin._config import (
     WorkerConfig,
     WorkerSettings,
     _sandbox_lifetime_seconds,
-    _session_function_timeout_seconds,
 )
 from modal_devin._exceptions import (
+    ClaimDeadlineError,
     ModalCompatibilityError,
     OutpostsAPIError,
     OutpostsProtocolError,
@@ -72,6 +74,16 @@ def _dispatch_key(session_id: str) -> str:
     return _session_store_key(_DISPATCH_KEY_PREFIX, session_id)
 
 
+def _dispatch_lease_seconds(settings: WorkerSettings) -> int:
+    """Bound duplicate dispatches while an invocation claims and starts its worker."""
+    return math.ceil(
+        settings.api_timeout_seconds
+        + settings.sandbox_ready_timeout_seconds
+        + settings.sidecar_ready_timeout_seconds
+        + settings.claim_connect_margin_seconds
+    )
+
+
 def _refresh_snapshot_index(snapshot_store: SnapshotStore) -> None:
     """Keep the Modal Dict index alive for snapshots with longer retention."""
     now = time.time()
@@ -102,9 +114,14 @@ def _reserve_dispatch(
         snapshot_store.pop(key, None)
     return snapshot_store.put(
         key,
-        now + _session_function_timeout_seconds(settings),
+        now + _dispatch_lease_seconds(settings),
         skip_if_exists=True,
     )
+
+
+def _new_acceptor_id(config: WorkerConfig) -> str:
+    """Give each independently running Modal invocation its own claim identity."""
+    return f"{config.acceptor_id}-{uuid.uuid4().hex[:12]}"
 
 
 def _configure_logging(settings: WorkerSettings) -> None:
@@ -126,11 +143,44 @@ def _release_safely(client: OutpostsClient, session_id: str, acceptor_id: str, r
         logger.info("[%s] released claim after %s", session_id, reason)
 
 
+def _claim_deadline_epoch(deadline: str | None) -> float | None:
+    if deadline is None:
+        return None
+    try:
+        return float(deadline)
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ClaimDeadlineError(f"unsupported claim deadline {deadline!r}") from error
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
+
+
+def _deadline_limited_timeout(
+    maximum_seconds: int,
+    *,
+    deadline_epoch: float | None,
+    reserve_seconds: int,
+) -> int:
+    if deadline_epoch is None:
+        return maximum_seconds
+    available = math.floor(deadline_epoch - time.time() - reserve_seconds)
+    if available < 1:
+        raise ClaimDeadlineError(
+            "not enough time remains to connect before the server-assigned claim deadline"
+        )
+    return min(maximum_seconds, available)
+
+
 def _new_sandbox(
     *,
     app: modal.App,
     image: modal.Image,
     settings: WorkerSettings,
+    readiness_timeout_seconds: int,
     sandbox_options: Mapping[str, Any],
 ) -> modal.Sandbox:
     sandbox = modal.Sandbox.create(
@@ -144,7 +194,7 @@ def _new_sandbox(
         **sandbox_options,
     )
     try:
-        sandbox.wait_until_ready(timeout=settings.sandbox_ready_timeout_seconds)
+        sandbox.wait_until_ready(timeout=readiness_timeout_seconds)
     except BaseException:
         _terminate_failed_sandbox(sandbox)
         raise
@@ -165,6 +215,7 @@ def _create_sandbox(
     session_id: str,
     snapshot_store: SnapshotStore,
     settings: WorkerSettings,
+    readiness_timeout_seconds: int,
     sandbox_options: Mapping[str, Any],
 ) -> modal.Sandbox:
     snapshot_key = _snapshot_key(session_id)
@@ -175,6 +226,7 @@ def _create_sandbox(
                 app=app,
                 image=modal.Image.from_id(snapshot_id),
                 settings=settings,
+                readiness_timeout_seconds=readiness_timeout_seconds,
                 sandbox_options=sandbox_options,
             )
             logger.info("[%s] resumed from filesystem snapshot %s", session_id, snapshot_id)
@@ -191,6 +243,7 @@ def _create_sandbox(
         app=app,
         image=base_image,
         settings=settings,
+        readiness_timeout_seconds=readiness_timeout_seconds,
         sandbox_options=sandbox_options,
     )
 
@@ -216,13 +269,14 @@ def _final_status(
     client: OutpostsClient,
     *,
     session_id: str,
-    acceptor_id: str,
     settings: WorkerSettings,
 ) -> tuple[bool, SessionStatus | None]:
-    """Return ``(known, status)`` without collapsing request failure into absence."""
+    """Poll through API lag and return ``(known, status)`` for a safe final state."""
+    last_status: SessionStatus | None = None
+    received_status = False
     for attempt in range(1, settings.status_attempts + 1):
         try:
-            return True, client.session_status(session_id, acceptor_id)
+            status = client.session_status(session_id)
         except OutpostsAPIError as error:
             logger.warning(
                 "[%s] status lookup %s/%s failed: %s",
@@ -231,9 +285,21 @@ def _final_status(
                 settings.status_attempts,
                 error,
             )
-            if attempt < settings.status_attempts:
-                time.sleep(settings.status_retry_delay_seconds * attempt)
-    return False, None
+        else:
+            received_status = True
+            last_status = status
+            if status is None or status == SessionStatus.SUSPENDED or status in _TERMINAL_STATUSES:
+                return True, status
+            logger.info(
+                "[%s] final status lookup %s/%s is still %s; waiting for propagation",
+                session_id,
+                attempt,
+                settings.status_attempts,
+                status,
+            )
+        if attempt < settings.status_attempts:
+            time.sleep(settings.status_retry_delay_seconds * attempt)
+    return received_status, last_status
 
 
 def _snapshot(
@@ -263,20 +329,29 @@ def _run_claimed_session(
     client: OutpostsClient,
     snapshot_store: SnapshotStore,
     session_id: str,
-    connect_token: str | None,
-    gateway_url: str | None,
+    acceptor_id: str,
+    claim_deadline: str | None,
     sidecar_image_id: str,
     sandbox_options: Mapping[str, Any],
 ) -> None:
     sandbox: modal.Sandbox | None = None
     primary_error: BaseException | None = None
+    deadline_epoch = _claim_deadline_epoch(claim_deadline)
     try:
+        sandbox_ready_timeout = _deadline_limited_timeout(
+            settings.sandbox_ready_timeout_seconds,
+            deadline_epoch=deadline_epoch,
+            reserve_seconds=(
+                settings.sidecar_ready_timeout_seconds + settings.claim_connect_margin_seconds
+            ),
+        )
         sandbox = _create_sandbox(
             app=app,
             base_image=image,
             session_id=session_id,
             snapshot_store=snapshot_store,
             settings=settings,
+            readiness_timeout_seconds=sandbox_ready_timeout,
             sandbox_options=sandbox_options,
         )
         try:
@@ -289,36 +364,32 @@ def _run_claimed_session(
         except modal.exception.NotFoundError:
             snapshot_store.pop(_SIDECAR_IMAGE_KEY, None)
             raise
-        _wait_for_sidecar(
-            sandbox,
-            timeout_seconds=settings.sidecar_ready_timeout_seconds,
+        sidecar_ready_timeout = _deadline_limited_timeout(
+            settings.sidecar_ready_timeout_seconds,
+            deadline_epoch=deadline_epoch,
+            reserve_seconds=settings.claim_connect_margin_seconds,
+        )
+        _wait_for_sidecar(sandbox, timeout_seconds=sidecar_ready_timeout)
+        _deadline_limited_timeout(
+            1,
+            deadline_epoch=deadline_epoch,
+            reserve_seconds=settings.claim_connect_margin_seconds,
         )
 
-        exec_env: dict[str, str | None] = {
-            "DEVIN_API_URL": f"http://caddy:{_SIDECAR_PORT}",
-            "DEVIN_OUTPOSTS_TOKEN": _DUMMY_TOKEN,
-        }
-        if connect_token is not None:
-            # Already claimed via our own client.claim() call above -- handing the resulting
-            # connect_token to devin-cli makes it run the remote directly instead of claiming
-            # the session a second time itself (which the beta API's response shape breaks).
-            exec_env["DEVIN_REMOTE_SESSION_TOKEN"] = connect_token
-            if gateway_url is not None:
-                # devin-cli only learns the gateway URL from the claim response it would have
-                # made itself; since DEVIN_REMOTE_SESSION_TOKEN skips that call, it must be
-                # supplied directly here instead.
-                exec_env["DEVIN_OUTPOST_GATEWAY_URL"] = gateway_url
         process = sandbox.exec(
             _DEVIN_BIN,
             "worker",
             "start",
             "--session",
             session_id,
-            "--pool",
+            "--outpost",
             config.outpost_id,
             "--acceptor-id",
-            config.acceptor_id,
-            env=exec_env,
+            acceptor_id,
+            env={
+                "DEVIN_API_URL": f"http://caddy:{_SIDECAR_PORT}",
+                "DEVIN_OUTPOSTS_TOKEN": _DUMMY_TOKEN,
+            },
             stderr=StreamType.STDOUT,
             timeout=settings.session_timeout_seconds,
         )
@@ -330,7 +401,6 @@ def _run_claimed_session(
         known, status = _final_status(
             client,
             session_id=session_id,
-            acceptor_id=config.acceptor_id,
             settings=settings,
         )
         safe_terminal = status is None or status in _TERMINAL_STATUSES
@@ -385,30 +455,34 @@ def execute_session(
     token: str,
     sandbox_options: Mapping[str, Any],
 ) -> None:
-    """Run one dispatched session and release it if any lifecycle step fails."""
+    """Run one dispatched session with isolated claim ownership."""
     _configure_logging(settings)
-    client = OutpostsClient(
-        config.api_url,
-        token,
-        timeout=settings.api_timeout_seconds,
-    )
     snapshot_store = modal.Dict.from_name(
         config.snapshot_store_name,
         create_if_missing=True,
     )
     snapshot_store.pop(_dispatch_key(session_id), None)
-    try:
-        claim = client.claim(session_id, config.acceptor_id)
-    except ClaimConflict:
-        logger.info("[%s] claim was acquired by another invocation", session_id)
-        return
-    logger.info(
-        "[%s] claimed with deadline %s; starting worker lifecycle",
-        session_id,
-        claim.deadline,
+    client = OutpostsClient(
+        config.api_url,
+        token,
+        timeout=settings.api_timeout_seconds,
     )
-
+    acceptor_id = _new_acceptor_id(config)
+    claimed = False
+    lifecycle_error: BaseException | None = None
     try:
+        try:
+            claim = client.claim(session_id, acceptor_id)
+        except ClaimConflict:
+            logger.info("[%s] claim was acquired by another invocation", session_id)
+            return
+        claimed = True
+        logger.info(
+            "[%s] claimed as %s with deadline %s; starting worker lifecycle",
+            session_id,
+            acceptor_id,
+            claim.deadline,
+        )
         sidecar_image_id = snapshot_store.get(_SIDECAR_IMAGE_KEY)
         if not isinstance(sidecar_image_id, str):
             raise ModalCompatibilityError("worker sidecar image has not been prepared")
@@ -420,15 +494,23 @@ def execute_session(
             client=client,
             snapshot_store=snapshot_store,
             session_id=session_id,
-            connect_token=claim.connect_token,
-            gateway_url=claim.gateway_url,
+            acceptor_id=acceptor_id,
+            claim_deadline=claim.deadline,
             sidecar_image_id=sidecar_image_id,
             sandbox_options=sandbox_options,
         )
-    except BaseException:
+    except BaseException as error:
+        lifecycle_error = error
         logger.exception("[%s] worker lifecycle failed", session_id)
-        _release_safely(client, session_id, config.acceptor_id, "worker failure")
         raise
+    finally:
+        if claimed:
+            _release_safely(
+                client,
+                session_id,
+                acceptor_id,
+                "worker failure" if lifecycle_error is not None else "confirmed session end",
+            )
 
 
 def dispatch_pending_sessions(

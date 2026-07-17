@@ -47,6 +47,7 @@ def test_worker_settings_read_typed_environment(monkeypatch):
     monkeypatch.setenv("MODAL_DEVIN_SNAPSHOT_TTL_SECONDS", "none")
     monkeypatch.setenv("MODAL_DEVIN_SNAPSHOT_TIMEOUT_SECONDS", "75")
     monkeypatch.setenv("MODAL_DEVIN_SIDECAR_READY_TIMEOUT_SECONDS", "12")
+    monkeypatch.setenv("MODAL_DEVIN_CLAIM_CONNECT_MARGIN_SECONDS", "20")
     monkeypatch.setenv("MODAL_DEVIN_LOG_LEVEL", "debug")
 
     settings = WorkerSettings.from_env()
@@ -56,6 +57,7 @@ def test_worker_settings_read_typed_environment(monkeypatch):
     assert settings.snapshot_ttl_seconds is None
     assert settings.snapshot_timeout_seconds == 75
     assert settings.sidecar_ready_timeout_seconds == 12
+    assert settings.claim_connect_margin_seconds == 20
     assert settings.log_level == "debug"
 
 

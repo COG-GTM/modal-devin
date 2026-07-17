@@ -49,6 +49,11 @@ until their input finishes, while new work shifts to the replacement version. Th
 durable dispatch lease prevents the old and new schedulers from starting the same
 pending session during that overlap.
 
+Independent schedulers may target the same Devin outpost. They can discover and
+dispatch the same pending session, but the Outposts atomic claim permits only one
+session invocation to serve it. Local dispatch leases reduce duplicate Modal work
+during rolling deployment overlap.
+
 Do not stop the Modal application before redeploying it. `modal app stop` permanently
 terminates its running containers, including active session invocations; deploying
 afterward creates a new application rather than performing a rolling update.

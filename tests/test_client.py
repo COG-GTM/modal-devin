@@ -55,7 +55,7 @@ def test_pending_sessions_are_typed_and_requests_have_standard_headers():
 
     assert result == ("devin-1",)
     [request] = recorder.requests
-    assert request.full_url.endswith("outpost=outpost+with+spaces&phase=pending")
+    assert request.full_url.endswith("outpost=outpost+with+spaces&phase=pending&first=200")
     assert request.get_header("Authorization") == "Bearer token-123"
     assert request.get_header("Accept") == "application/json"
     assert request.get_header("User-agent") == "modal-devin"
@@ -109,54 +109,65 @@ def test_malformed_responses_raise_protocol_errors(body):
 
 
 def test_status_distinguishes_successful_absence_from_request_failure():
-    client = make_client(RecordingUrlOpen([{"items": []}]))
-    assert client.session_status("devin-1", "modal-worker") is None
+    not_found = urllib.error.HTTPError("url", 404, "Not Found", Message(), None)
+    client = make_client(RecordingUrlOpen([not_found]))
+    assert client.session_status("devin-1") is None
 
     failing = make_client(RecordingUrlOpen([urllib.error.URLError("offline")]))
     with pytest.raises(OutpostsAPIError):
-        failing.session_status("devin-1", "modal-worker")
+        failing.session_status("devin-1")
 
 
 def test_status_is_parsed_into_a_closed_protocol_type():
-    known = make_client(
-        RecordingUrlOpen(
-            [
-                {
-                    "items": [
-                        {
-                            "metadata": {"session_id": "devin-1"},
-                            "status": {"session_status": "suspended"},
-                        }
-                    ]
-                }
-            ]
-        )
-    )
+    known = make_client(RecordingUrlOpen([{"status": {"session_status": "suspended"}}]))
 
-    assert known.session_status("devin-1", "modal-worker") is SessionStatus.SUSPENDED
+    assert known.session_status("devin-1") is SessionStatus.SUSPENDED
 
-    unknown = make_client(
-        RecordingUrlOpen(
-            [
-                {
-                    "items": [
-                        {
-                            "metadata": {"session_id": "devin-1"},
-                            "status": {"session_status": "future-state"},
-                        }
-                    ]
-                }
-            ]
-        )
-    )
+    unknown = make_client(RecordingUrlOpen([{"status": {"session_status": "future-state"}}]))
     with pytest.raises(OutpostsProtocolError, match="unknown Outposts session status"):
-        unknown.session_status("devin-1", "modal-worker")
+        unknown.session_status("devin-1")
 
-    missing = make_client(
-        RecordingUrlOpen([{"items": [{"metadata": {"session_id": "devin-1"}, "status": {}}]}])
-    )
+    missing = make_client(RecordingUrlOpen([{"status": {}}]))
     with pytest.raises(OutpostsProtocolError, match=r"status\.session_status"):
-        missing.session_status("devin-1", "modal-worker")
+        missing.session_status("devin-1")
+
+
+def test_pending_sessions_paginate_and_deduplicate_page_boundaries():
+    recorder = RecordingUrlOpen(
+        [
+            {
+                "items": [{"metadata": {"session_id": "devin-1"}}],
+                "cursor": "next",
+                "has_next_page": True,
+            },
+            {
+                "items": [
+                    {"metadata": {"session_id": "devin-1"}},
+                    {"metadata": {"session_id": "devin-2"}},
+                ],
+                "cursor": "done",
+                "has_next_page": False,
+            },
+        ]
+    )
+
+    assert make_client(recorder).pending_session_ids("outpost") == ("devin-1", "devin-2")
+    assert "cursor=next" in recorder.requests[1].full_url
+
+
+def test_pending_sessions_reject_non_adjacent_cursor_cycles():
+    recorder = RecordingUrlOpen(
+        [
+            {"items": [], "cursor": "A", "has_next_page": True},
+            {"items": [], "cursor": "B", "has_next_page": True},
+            {"items": [], "cursor": "A", "has_next_page": True},
+        ]
+    )
+
+    with pytest.raises(OutpostsProtocolError, match="repeated cursor 'A'"):
+        make_client(recorder).pending_session_ids("outpost")
+
+    assert len(recorder.requests) == 3
 
 
 def test_response_size_is_bounded():

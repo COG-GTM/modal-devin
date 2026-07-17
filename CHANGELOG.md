@@ -5,6 +5,41 @@ and uses semantic versioning.
 
 ## Unreleased
 
+## 0.1.5 - 2026-07-16
+
+### Fixed
+
+- Every Modal session invocation now uses its own acceptor ID, so concurrent or
+  duplicate Sandboxes cannot renew, steal, or release one another's claims.
+- Final-state checks now retry successful but stale `pending`, `claimed`, or `running`
+  responses before deciding recovery is required, matching the Outposts propagation
+  contract.
+- Claimed sessions are released after both confirmed completion and failure. Startup
+  waits are bounded by the server-assigned claim deadline so an expired attempt does
+  not continue provisioning in parallel with its replacement.
+- Queue listing now paginates and deduplicates sessions at page boundaries, and final
+  state checks use the single-session resource instead of a shared-acceptor list.
+  Pagination tracks all cursors and rejects cycles or excessive page counts.
+
+### Changed
+
+- The default API URL is now `https://api.devin.ai`.
+- The default worker duration is 12 hours instead of 30 minutes, and the default
+  scheduler interval is restored to 30 seconds to reduce full-queue polling load.
+- Worker startup now follows the documented Devin CLI contract: `--session`,
+  `--outpost`, and the same unique `--acceptor-id` used for the API claim. Worker
+  image builds verify those flags before deployment, failing during the build if an
+  unpinned CLI update is incompatible.
+- Independent schedulers may target the same outpost. Dispatch leases reduce
+  duplicate Modal invocations locally, while the Outposts atomic claim decides which
+  invocation serves each session.
+
+### Removed
+
+- The custom per-outpost ownership lock and per-session retry circuit breaker. Claim
+  conflicts, expiration, and release now provide the documented fleet coordination
+  and recovery behavior without a second ownership system.
+
 ## 0.1.4 - 2026-07-16
 
 ### Fixed

@@ -4,6 +4,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from modal_devin._config import WorkerSettings
 from modal_devin._exceptions import (
+    ClaimDeadlineError,
     ConfigurationError,
     ModalCompatibilityError,
     ModalDevinError,
@@ -20,6 +21,7 @@ except PackageNotFoundError:  # pragma: no cover - source trees without installe
     __version__ = "0+unknown"
 
 __all__ = [
+    "ClaimDeadlineError",
     "ConfigurationError",
     "ModalCompatibilityError",
     "ModalDevinError",

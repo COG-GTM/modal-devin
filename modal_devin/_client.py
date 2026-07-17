@@ -17,6 +17,7 @@ from modal_devin._exceptions import OutpostsAPIError, OutpostsProtocolError
 JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
 _MAX_RESPONSE_BYTES = 1024 * 1024
+_MAX_LIST_PAGES = 10_000
 
 
 class HTTPResponse(Protocol):
@@ -52,8 +53,6 @@ class _HTTPError(OutpostsAPIError):
 @dataclass(frozen=True, slots=True)
 class Claim:
     deadline: str | None
-    connect_token: str | None
-    gateway_url: str | None
 
 
 class SessionStatus(StrEnum):
@@ -170,6 +169,11 @@ class OutpostsClient:
         encoded = urllib.parse.quote(session_id, safe="")
         return f"/opbeta/outposts/devins/{encoded}/{action}"
 
+    @staticmethod
+    def _session_resource_path(session_id: str) -> str:
+        encoded = urllib.parse.quote(session_id, safe="")
+        return f"/opbeta/outposts/devins/{encoded}"
+
     def create_outpost(self, name: str, *, platform: str = "linux", description: str = "") -> str:
         response = self._request(
             "POST",
@@ -183,19 +187,42 @@ class OutpostsClient:
         self._request("DELETE", f"/opbeta/outposts/{encoded}")
 
     def pending_session_ids(self, outpost_id: str) -> tuple[str, ...]:
-        query = urllib.parse.urlencode({"outpost": outpost_id, "phase": "pending"})
-        response = self._request("GET", f"/opbeta/outposts/devins?{query}")
-        session_ids: list[str] = []
-        for index, item in enumerate(_items(response)):
-            session_ids.append(
-                _required_nested_string(
-                    item,
-                    "metadata",
-                    "session_id",
-                    context=f"pending item {index}",
+        session_ids: dict[str, None] = {}
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        page = 0
+        while True:
+            if page >= _MAX_LIST_PAGES:
+                raise OutpostsProtocolError(f"Outposts pagination exceeded {_MAX_LIST_PAGES} pages")
+            parameters = {"outpost": outpost_id, "phase": "pending", "first": "200"}
+            if cursor is not None:
+                parameters["cursor"] = cursor
+            query = urllib.parse.urlencode(parameters)
+            response = self._request("GET", f"/opbeta/outposts/devins?{query}")
+            for index, item in enumerate(_items(response)):
+                session_ids[
+                    _required_nested_string(
+                        item,
+                        "metadata",
+                        "session_id",
+                        context=f"pending page {page} item {index}",
+                    )
+                ] = None
+            has_next_page = response.get("has_next_page", False)
+            if not isinstance(has_next_page, bool):
+                raise OutpostsProtocolError("Outposts response has a non-boolean has_next_page")
+            if not has_next_page:
+                return tuple(session_ids)
+            next_cursor = response.get("cursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
+                raise OutpostsProtocolError(
+                    "paginated Outposts response is missing a usable cursor"
                 )
-            )
-        return tuple(session_ids)
+            if next_cursor in seen_cursors:
+                raise OutpostsProtocolError(f"Outposts pagination repeated cursor {next_cursor!r}")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+            page += 1
 
     def claim(self, session_id: str, acceptor_id: str) -> Claim:
         try:
@@ -210,8 +237,6 @@ class OutpostsClient:
             raise OutpostsAPIError(f"claim request for {session_id!r} failed: {error}") from error
         return Claim(
             deadline=_nested_string(response, "status", "claim_deadline"),
-            connect_token=_nested_string(response, "status", "connect_token"),
-            gateway_url=_nested_string(response, "status", "gateway_url"),
         )
 
     def release(self, session_id: str, acceptor_id: str) -> None:
@@ -221,22 +246,17 @@ class OutpostsClient:
             {"acceptor_id": acceptor_id},
         )
 
-    def session_status(self, session_id: str, acceptor_id: str) -> SessionStatus | None:
-        query = urllib.parse.urlencode({"phase": "claimed", "acceptor_id": acceptor_id})
-        response = self._request("GET", f"/opbeta/outposts/devins?{query}")
-        for index, item in enumerate(_items(response)):
-            item_session_id = _required_nested_string(
-                item,
-                "metadata",
-                "session_id",
-                context=f"claimed item {index}",
-            )
-            if item_session_id == session_id:
-                value = _required_nested_string(
-                    item,
-                    "status",
-                    "session_status",
-                    context=f"claimed session {session_id!r}",
-                )
-                return _session_status(value)
-        return None
+    def session_status(self, session_id: str) -> SessionStatus | None:
+        try:
+            response = self._request("GET", self._session_resource_path(session_id))
+        except _HTTPError as error:
+            if error.status_code == 404:
+                return None
+            raise OutpostsAPIError(f"status request for {session_id!r} failed: {error}") from error
+        value = _required_nested_string(
+            response,
+            "status",
+            "session_status",
+            context=f"session {session_id!r}",
+        )
+        return _session_status(value)

@@ -13,7 +13,7 @@ maintain and deploy the generated file like other application code.
 worker = Worker.from_env(
     "my-outpost",
     outpost_id="outpost_env-...",
-    api_url="https://api.beta.devinenterprise.com",
+    api_url="https://api.devin.ai",
 )
 
 app = modal.App(
@@ -59,8 +59,9 @@ def session(session_id: str) -> None:
     )
 ```
 
-Customize the decorator using Modal's [retry](https://modal.com/docs/guide/retries)
-and [region](https://modal.com/docs/guide/region-selection) controls. Pass supported
+Add Modal function retries only when you intentionally want failed invocations to
+make a fresh claim attempt. Customize the decorator using
+[region](https://modal.com/docs/guide/region-selection) controls. Pass supported
 [Sandbox resource options](https://modal.com/docs/guide/sandbox-resources) such as
 CPU, memory, and region to `run_session()`.
 

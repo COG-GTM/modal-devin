@@ -12,9 +12,9 @@ from typing import Any, Self, cast
 
 from modal_devin._exceptions import ConfigurationError
 
-DEFAULT_API_URL = "https://api.beta.devinenterprise.com"
-DEFAULT_SCHEDULER_INTERVAL_SECONDS = 3
-DEFAULT_SESSION_TIMEOUT_SECONDS = 1800
+DEFAULT_API_URL = "https://api.devin.ai"
+DEFAULT_SCHEDULER_INTERVAL_SECONDS = 30
+DEFAULT_SESSION_TIMEOUT_SECONDS = 12 * 60 * 60
 DEFAULT_API_TIMEOUT_SECONDS = 30.0
 DEFAULT_SNAPSHOT_TTL_SECONDS = 30 * 24 * 60 * 60
 DEFAULT_STATUS_ATTEMPTS = 3
@@ -22,6 +22,7 @@ DEFAULT_STATUS_RETRY_DELAY_SECONDS = 1.0
 DEFAULT_SANDBOX_READY_TIMEOUT_SECONDS = 120
 DEFAULT_SIDECAR_READY_TIMEOUT_SECONDS = 60
 DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 120
+DEFAULT_CLAIM_CONNECT_MARGIN_SECONDS = 15
 
 _TERMINATION_MARGIN_SECONDS = 30
 
@@ -70,6 +71,7 @@ class WorkerSettings:
     sandbox_ready_timeout_seconds: int = DEFAULT_SANDBOX_READY_TIMEOUT_SECONDS
     sidecar_ready_timeout_seconds: int = DEFAULT_SIDECAR_READY_TIMEOUT_SECONDS
     snapshot_timeout_seconds: int = DEFAULT_SNAPSHOT_TIMEOUT_SECONDS
+    claim_connect_margin_seconds: int = DEFAULT_CLAIM_CONNECT_MARGIN_SECONDS
     log_level: str = "INFO"
 
     def __post_init__(self) -> None:
@@ -81,6 +83,7 @@ class WorkerSettings:
             "sandbox_ready_timeout_seconds",
             "sidecar_ready_timeout_seconds",
             "snapshot_timeout_seconds",
+            "claim_connect_margin_seconds",
         )
         for name in positive:
             if getattr(self, name) <= 0:
@@ -109,6 +112,7 @@ class WorkerSettings:
             "sandbox_ready_timeout_seconds",
             "sidecar_ready_timeout_seconds",
             "snapshot_timeout_seconds",
+            "claim_connect_margin_seconds",
         }
         float_fields = {"api_timeout_seconds", "status_retry_delay_seconds"}
         for field in fields(cls):

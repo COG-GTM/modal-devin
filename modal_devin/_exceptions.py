@@ -27,6 +27,10 @@ class SessionStatusUnknownError(ModalDevinError):
     """A session's final status could not be established safely."""
 
 
+class ClaimDeadlineError(ModalDevinError):
+    """A claimed session cannot connect safely before its readiness deadline."""
+
+
 class WorkerExitedError(ModalDevinError):
     """The Devin worker process exited unsuccessfully."""
 

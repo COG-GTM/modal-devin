@@ -9,6 +9,7 @@ import modal
 import pytest
 
 from modal_devin import (
+    ClaimDeadlineError,
     ModalCompatibilityError,
     OutpostsAPIError,
     OutpostsProtocolError,
@@ -75,8 +76,9 @@ class Sandbox:
 class Client:
     token = "real-token"
 
-    def __init__(self, *, status=None, status_errors=(), claim_error=None):
+    def __init__(self, *, status=None, statuses=(), status_errors=(), claim_error=None):
         self.status = status
+        self.statuses = list(statuses)
         self.status_errors = list(status_errors)
         self.claim_error = claim_error
         self.claims = []
@@ -86,11 +88,13 @@ class Client:
         self.claims.append((session_id, acceptor_id))
         if self.claim_error:
             raise self.claim_error
-        return Claim("tomorrow", "connect-token", "wss://gateway.example")
+        return Claim(None)
 
-    def session_status(self, session_id, acceptor_id):
+    def session_status(self, session_id):
         if self.status_errors:
             raise self.status_errors.pop(0)
+        if self.statuses:
+            return self.statuses.pop(0)
         return self.status
 
     def release(self, session_id, acceptor_id):
@@ -123,8 +127,8 @@ def run_claimed(monkeypatch, *, config, settings, client, store, sandbox):
         client=client,
         snapshot_store=store,
         session_id="devin-1",
-        connect_token="connect-token",
-        gateway_url="wss://gateway.example",
+        acceptor_id="modal-demo-attempt",
+        claim_deadline=None,
         sidecar_image_id="im-sidecar",
         sandbox_options={},
     )
@@ -161,7 +165,22 @@ def test_suspended_session_is_snapshotted_by_id(monkeypatch, config, settings):
     assert store.values[runtime._snapshot_key("devin-1")] == "im-snapshot"
     assert sandbox.snapshot_calls == [(settings.snapshot_timeout_seconds, 123)]
     assert sandbox.terminated
-    [(_args, kwargs)] = sandbox.exec_calls
+    [(args, kwargs)] = sandbox.exec_calls
+    assert args == (
+        runtime._DEVIN_BIN,
+        "worker",
+        "start",
+        "--session",
+        "devin-1",
+        "--outpost",
+        config.outpost_id,
+        "--acceptor-id",
+        "modal-demo-attempt",
+    )
+    assert kwargs["env"] == {
+        "DEVIN_API_URL": f"http://caddy:{runtime._SIDECAR_PORT}",
+        "DEVIN_OUTPOSTS_TOKEN": runtime._DUMMY_TOKEN,
+    }
     assert kwargs["stderr"].name == "STDOUT"
     assert kwargs["timeout"] == settings.session_timeout_seconds
 
@@ -280,9 +299,39 @@ def test_run_session_releases_claim_after_any_failure(monkeypatch, config, setti
             sandbox_options={},
         )
 
-    assert client.releases == [("devin-1", config.acceptor_id)]
-    assert client.claims == [("devin-1", config.acceptor_id)]
+    [(claimed_session, claimed_acceptor)] = client.claims
+    assert claimed_session == "devin-1"
+    assert claimed_acceptor.startswith(config.acceptor_id + "-")
+    assert client.releases == [("devin-1", claimed_acceptor)]
     assert dispatch_key not in store.values
+
+
+def test_run_session_releases_claim_after_success(monkeypatch, config, settings):
+    client = Client()
+    store = Store(
+        {
+            runtime._SIDECAR_IMAGE_KEY: "im-sidecar",
+            runtime._dispatch_key("devin-1"): 9_999_999.0,
+        }
+    )
+    monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
+    monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
+    monkeypatch.setattr(runtime, "_run_claimed_session", Mock())
+
+    runtime.execute_session(
+        app=Mock(),
+        image=Mock(),
+        config=config,
+        settings=settings,
+        session_id="devin-1",
+        token="token",
+        sandbox_options={},
+    )
+
+    [(claimed_session, acceptor_id)] = client.claims
+    assert claimed_session == "devin-1"
+    assert client.releases == [("devin-1", acceptor_id)]
+    assert runtime._dispatch_key("devin-1") not in store.values
 
 
 def test_run_session_claim_conflict_is_a_successful_duplicate(monkeypatch, config, settings):
@@ -302,7 +351,9 @@ def test_run_session_claim_conflict_is_a_successful_duplicate(monkeypatch, confi
         sandbox_options={},
     )
 
-    assert client.claims == [("devin-1", config.acceptor_id)]
+    [(claimed_session, claimed_acceptor)] = client.claims
+    assert claimed_session == "devin-1"
+    assert claimed_acceptor.startswith(config.acceptor_id + "-")
     assert client.releases == []
     run_claimed_session.assert_not_called()
 
@@ -328,7 +379,7 @@ def test_started_invocation_clears_its_lease_before_claiming(monkeypatch, config
     assert dispatch_key not in store.values
 
 
-def test_modal_retry_reacquires_the_claim(monkeypatch, config, settings):
+def test_direct_modal_retry_reclaims_with_a_new_acceptor(monkeypatch, config, settings):
     client = Client()
     store = Store({runtime._SIDECAR_IMAGE_KEY: "im-sidecar"})
     monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
@@ -338,7 +389,6 @@ def test_modal_retry_reacquires_the_claim(monkeypatch, config, settings):
         "_run_claimed_session",
         Mock(side_effect=RuntimeError("retryable failure")),
     )
-
     for _ in range(2):
         with pytest.raises(RuntimeError, match="retryable failure"):
             runtime.execute_session(
@@ -351,8 +401,10 @@ def test_modal_retry_reacquires_the_claim(monkeypatch, config, settings):
                 sandbox_options={},
             )
 
-    assert client.claims == [("devin-1", config.acceptor_id)] * 2
-    assert client.releases == [("devin-1", config.acceptor_id)] * 2
+    acceptors = [acceptor_id for _session_id, acceptor_id in client.claims]
+    assert len(set(acceptors)) == 2
+    assert all(value.startswith(config.acceptor_id + "-") for value in acceptors)
+    assert client.releases == [("devin-1", value) for value in acceptors]
 
 
 def test_run_session_releases_claim_when_sidecar_preparation_is_missing(
@@ -373,7 +425,9 @@ def test_run_session_releases_claim_when_sidecar_preparation_is_missing(
             sandbox_options={},
         )
 
-    assert client.releases == [("devin-1", config.acceptor_id)]
+    [(released_session, released_acceptor)] = client.releases
+    assert released_session == "devin-1"
+    assert released_acceptor.startswith(config.acceptor_id + "-")
 
 
 def test_lazy_snapshot_expiry_falls_back_and_forgets_mapping(monkeypatch, config, settings):
@@ -390,6 +444,7 @@ def test_lazy_snapshot_expiry_falls_back_and_forgets_mapping(monkeypatch, config
         session_id="devin-1",
         snapshot_store=store,
         settings=settings,
+        readiness_timeout_seconds=settings.sandbox_ready_timeout_seconds,
         sandbox_options={},
     )
 
@@ -409,6 +464,7 @@ def test_readiness_failure_terminates_the_half_started_sandbox(monkeypatch, sett
             app=Mock(),
             image=Mock(),
             settings=settings,
+            readiness_timeout_seconds=settings.sandbox_ready_timeout_seconds,
             sandbox_options={},
         )
 
@@ -438,12 +494,79 @@ def test_status_lookup_retries_transport_errors_then_recovers(settings):
     known, status = runtime._final_status(
         cast(OutpostsClient, client),
         session_id="devin-1",
-        acceptor_id="modal-demo",
         settings=settings,
     )
 
     assert known is True
     assert status == "suspended"
+
+
+def test_status_lookup_retries_successful_but_stale_states(settings):
+    client = Client(statuses=["running", "running", "terminated"])
+
+    known, status = runtime._final_status(
+        cast(OutpostsClient, client),
+        session_id="devin-1",
+        settings=settings,
+    )
+
+    assert known is True
+    assert status == "terminated"
+    assert client.statuses == []
+
+
+def test_claim_deadline_bounds_sandbox_and_sidecar_startup(monkeypatch, config, settings):
+    now = 1_000.0
+    sandbox = Sandbox()
+    create_sandbox = Mock(return_value=sandbox)
+    wait_for_sidecar = Mock()
+    monkeypatch.setattr(runtime.time, "time", Mock(return_value=now))
+    monkeypatch.setattr(runtime, "_create_sandbox", create_sandbox)
+    monkeypatch.setattr(runtime, "_create_sidecar", Mock())
+    monkeypatch.setattr(runtime, "_wait_for_sidecar", wait_for_sidecar)
+
+    runtime._run_claimed_session(
+        app=Mock(),
+        image=Mock(),
+        config=config,
+        settings=settings,
+        client=cast(OutpostsClient, Client(status="terminated")),
+        snapshot_store=Store(),
+        session_id="devin-1",
+        acceptor_id="modal-demo-attempt",
+        claim_deadline=str(now + 100),
+        sidecar_image_id="im-sidecar",
+        sandbox_options={},
+    )
+
+    assert create_sandbox.call_args.kwargs["readiness_timeout_seconds"] == 25
+    wait_for_sidecar.assert_called_once_with(
+        sandbox,
+        timeout_seconds=settings.sidecar_ready_timeout_seconds,
+    )
+
+
+def test_expired_claim_deadline_fails_before_creating_a_sandbox(monkeypatch, config, settings):
+    create_sandbox = Mock()
+    monkeypatch.setattr(runtime.time, "time", Mock(return_value=1_000.0))
+    monkeypatch.setattr(runtime, "_create_sandbox", create_sandbox)
+
+    with pytest.raises(ClaimDeadlineError, match="not enough time"):
+        runtime._run_claimed_session(
+            app=Mock(),
+            image=Mock(),
+            config=config,
+            settings=settings,
+            client=cast(OutpostsClient, Client()),
+            snapshot_store=Store(),
+            session_id="devin-1",
+            acceptor_id="modal-demo-attempt",
+            claim_deadline="999",
+            sidecar_image_id="im-sidecar",
+            sandbox_options={},
+        )
+
+    create_sandbox.assert_not_called()
 
 
 def test_snapshot_without_an_image_id_fails_loudly(settings):
@@ -478,8 +601,8 @@ def test_missing_cached_sidecar_is_evicted_for_the_next_scheduler(monkeypatch, c
             client=cast(OutpostsClient, Client()),
             snapshot_store=store,
             session_id="devin-1",
-            connect_token="connect-token",
-            gateway_url="wss://gateway.example",
+            acceptor_id="modal-demo-attempt",
+            claim_deadline=None,
             sidecar_image_id="im-deleted",
             sandbox_options={},
         )
@@ -504,7 +627,7 @@ class PollClient:
         if self.claim_error:
             raise self.claim_error
         self.claimed.append((session_id, acceptor_id))
-        return Claim("tomorrow", "connect-token", "wss://gateway.example")
+        return Claim("tomorrow")
 
     def release(self, session_id, acceptor_id):
         self.released.append((session_id, acceptor_id))

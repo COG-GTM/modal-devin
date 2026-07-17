@@ -20,6 +20,13 @@ _DEVIN_BIN = "/root/.local/bin/devin"
 # "the binary actually works" the real success signal instead, so a genuine install
 # failure (bad download, missing binary, ...) still fails the build.
 _DEVIN_CLI_INSTALL = f"curl -fsSL https://cli.devin.ai/install.sh | bash; test -x {_DEVIN_BIN}"
+_DEVIN_CLI_CONTRACT_CHECK = (
+    f"{_DEVIN_BIN} worker start --help > /tmp/devin-worker-help "
+    "&& grep -q -- '--session' /tmp/devin-worker-help "
+    "&& grep -q -- '--outpost' /tmp/devin-worker-help "
+    "&& grep -q -- '--acceptor-id' /tmp/devin-worker-help "
+    "&& rm /tmp/devin-worker-help"
+)
 
 _CADDYFILE = """\
 {
@@ -94,6 +101,7 @@ def _worker_image(
         modal.Image.debian_slim(python_version=python_version)
         .apt_install("git", "curl", "ca-certificates", "tar")
         .run_commands(_DEVIN_CLI_INSTALL)
+        .run_commands(_DEVIN_CLI_CONTRACT_CHECK)
         .run_commands("mkdir -p /root/workspace")
     )
     if install_ffmpeg:
