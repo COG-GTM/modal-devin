@@ -5,6 +5,14 @@ and uses semantic versioning.
 
 ## Unreleased
 
+## 0.1.7 - 2026-07-16
+
+### Fixed
+
+- The default Devin API URL is restored to
+  `https://api.beta.devinenterprise.com`; explicit `api_url` overrides remain
+  supported.
+
 ## 0.1.6 - 2026-07-16
 
 ### Fixed
