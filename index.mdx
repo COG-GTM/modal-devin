@@ -1,32 +1,40 @@
 ---
-title: Run Devin workers on Modal
-description: Run Devin Outposts sessions in customizable, resumable Modal Sandboxes.
+title: Give Devin the infrastructure your work requires
+description: Run Devin Outposts sessions on Modal with the compute, workspace, and controls your engineering work needs.
 icon: rocket
 ---
 
-`modal-devin` runs Devin Outposts sessions on Modal. Devin's planning remains in
-Devin Cloud while commands, file edits, and repository access happen in isolated
-Modal Sandboxes that you control.
+`modal-devin` lets you run Devin's work where your work already lives. Devin plans
+in Devin Cloud while commands, file edits, repository access, and workloads run in
+isolated Modal Sandboxes you configure and control.
 
-Use it when you need:
+That means Devin can use the environment the task actually needs—not a one-size-fits-all
+development VM. Give it a GPU for model-serving or training work, a persistent Modal
+Volume for large datasets and weights, or access to services and registries available
+from your Modal environment.
 
-- Custom tools, repositories, or system packages for Devin sessions.
-- Access to services and registries available from your Modal environment.
-- Modal compute, memory, region, retry, and scheduling controls.
-- A preserved workspace when a Devin session is suspended and resumed.
+## Why run Devin on your infrastructure?
 
-<Note>
-  `modal-devin` is alpha software. Until the first stable release, only the latest
-  release on the default branch receives security fixes.
-</Note>
+Most software work fits in a CPU-only sandbox. Some of the highest-value work does
+not: validating a dependency upgrade against production-like hardware, diagnosing a
+bug that appears only under GPU load, or tuning an inference server against a real
+model and dataset.
 
-## How it fits into Outposts
+Use a Modal-backed outpost when Devin needs:
 
-Outposts has two layers:
+- Specialized compute, including GPUs, memory configurations, or a specific region.
+- A persistent workspace or shared data that should not be downloaded for every session.
+- Custom tools, project source, system packages, and credentials.
+- Connectivity to the services and registries your Modal environment can reach.
+- The deployment and operational controls you already use with Modal.
 
-1. The **worker** executes one Devin session inside a Modal Sandbox.
-2. The **orchestrator** finds queued sessions, manages their compute lifecycle, and
-   runs as a Modal application.
+## How it works
+
+`modal-devin` connects an outpost to Modal in two parts:
+
+1. The **orchestrator** watches your outpost for queued sessions and manages their
+   compute lifecycle as a Modal application.
+2. The **worker** runs each accepted session inside its own Modal Sandbox.
 
 Workers need outbound HTTPS access to Devin and run without inbound ports or a public
 IP.
@@ -39,41 +47,56 @@ flowchart LR
     S --> W["Devin worker and your workspace"]
 ```
 
-## Choose your path
+## Get started
 
 <Columns cols={2}>
-  <Card title="Deploy an existing outpost" icon="play" href="/tutorials/first-worker">
-    Go from an outpost ID to a verified Modal deployment.
-  </Card>
   <Card title="Create a new outpost" icon="wand-magic-sparkles" href="/tutorials/create-an-outpost">
-    Create the outpost, credential, and application interactively.
+    Run one guided command to register an outpost, generate your app, and deploy it.
+  </Card>
+  <Card title="Deploy an existing outpost" icon="play" href="/tutorials/first-worker">
+    Connect an outpost ID to a verified Modal deployment.
   </Card>
   <Card title="Build the workspace" icon="code" href="/tutorials/custom-workspace">
-    Add project source and tools to every new session.
+    Add project source, tools, packages, data, or Volumes to every session.
   </Card>
   <Card title="Configure compute" icon="microchip" href="/guides/resources-and-regions">
-    Choose resources and placement for session workloads.
+    Choose the compute, GPU, memory, and placement for session workloads.
   </Card>
 </Columns>
 
-## What you control
+## Your generated Modal application
 
-The setup command generates an ordinary Modal application in your project. Edit it
-to choose:
+Run the guided setup from the project that will own the outpost:
 
-- Project source, tools, dependencies, and Modal Secrets for your functions and workloads.
-- CPU, memory, region, retries, schedule, session duration, and snapshot retention.
-- Application names, tags, and deployment policy.
+```bash
+uvx run modal-devin init
+```
 
-`modal-devin` handles queue consumption, worker startup, resumability, credentials,
-and cleanup, leaving your application free of lifecycle reimplementation.
+It creates an outpost, writes a minimal Modal application to your repository, and can
+deploy it immediately. The generated application is ordinary code you own: customize
+it as your workloads evolve.
+
+You choose:
+
+- Project source, tools, dependencies, Volumes, and Modal Secrets.
+- CPU, GPU, memory, region, retries, schedule, and deployment policy.
+- How much state to preserve when a Devin session is suspended and resumed.
+
+`modal-devin` handles queue consumption, worker startup, resumability, scoped session
+credentials, and cleanup—so you can focus on the environment, not reimplementing the
+Outposts lifecycle.
+
+<Note>
+  `modal-devin` is alpha software. Until the first stable release, only the latest
+  release on the default branch receives security fixes.
+</Note>
 
 ## Requirements
 
 - Python 3.11 or newer.
 - A Modal account with locally configured credentials.
 - A Devin organization with Outposts enabled.
-- An existing outpost ID, or the Devin CLI to create one.
+- An existing outpost ID, or permission to create one through the setup wizard.
 - A Devin token authorized to manage the outpost and serve its sessions.
 
 <Card title="Deploy your first worker" icon="arrow-right" href="/tutorials/first-worker" horizontal>
