@@ -53,6 +53,8 @@ class _HTTPError(OutpostsAPIError):
 @dataclass(frozen=True, slots=True)
 class Claim:
     deadline: str | None
+    connect_token: str | None
+    gateway_url: str | None
 
 
 class SessionStatus(StrEnum):
@@ -237,6 +239,8 @@ class OutpostsClient:
             raise OutpostsAPIError(f"claim request for {session_id!r} failed: {error}") from error
         return Claim(
             deadline=_nested_string(response, "status", "claim_deadline"),
+            connect_token=_nested_string(response, "status", "connect_token"),
+            gateway_url=_nested_string(response, "status", "gateway_url"),
         )
 
     def release(self, session_id: str, acceptor_id: str) -> None:

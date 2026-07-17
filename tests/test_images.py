@@ -43,9 +43,9 @@ def test_devin_installer_verifies_the_binary_instead_of_trusting_install_shs_exi
 
 def test_worker_image_checks_the_unpinned_cli_contract_during_build():
     assert "--session" in _DEVIN_CLI_CONTRACT_CHECK
-    assert "--outpost" in _DEVIN_CLI_CONTRACT_CHECK
+    assert "--pool" in _DEVIN_CLI_CONTRACT_CHECK
     assert "--acceptor-id" in _DEVIN_CLI_CONTRACT_CHECK
-    assert "DEVIN_REMOTE_SESSION_TOKEN" not in _DEVIN_CLI_CONTRACT_CHECK
+    assert "DEVIN_REMOTE_SESSION_TOKEN" in _DEVIN_CLI_CONTRACT_CHECK
 
 
 def test_controller_image_is_small_and_contains_the_runtime_source():

@@ -88,7 +88,7 @@ class Client:
         self.claims.append((session_id, acceptor_id))
         if self.claim_error:
             raise self.claim_error
-        return Claim(None)
+        return Claim(None, "connect-token", "wss://gateway.example")
 
     def session_status(self, session_id):
         if self.status_errors:
@@ -129,6 +129,8 @@ def run_claimed(monkeypatch, *, config, settings, client, store, sandbox):
         session_id="devin-1",
         acceptor_id="modal-demo-attempt",
         claim_deadline=None,
+        connect_token="connect-token",
+        gateway_url="wss://gateway.example",
         sidecar_image_id="im-sidecar",
         sandbox_options={},
     )
@@ -172,7 +174,7 @@ def test_suspended_session_is_snapshotted_by_id(monkeypatch, config, settings):
         "start",
         "--session",
         "devin-1",
-        "--outpost",
+        "--pool",
         config.outpost_id,
         "--acceptor-id",
         "modal-demo-attempt",
@@ -180,6 +182,8 @@ def test_suspended_session_is_snapshotted_by_id(monkeypatch, config, settings):
     assert kwargs["env"] == {
         "DEVIN_API_URL": f"http://caddy:{runtime._SIDECAR_PORT}",
         "DEVIN_OUTPOSTS_TOKEN": runtime._DUMMY_TOKEN,
+        "DEVIN_REMOTE_SESSION_TOKEN": "connect-token",
+        "DEVIN_OUTPOST_GATEWAY_URL": "wss://gateway.example",
     }
     assert kwargs["stderr"].name == "STDOUT"
     assert kwargs["timeout"] == settings.session_timeout_seconds
@@ -535,6 +539,8 @@ def test_claim_deadline_bounds_sandbox_and_sidecar_startup(monkeypatch, config, 
         session_id="devin-1",
         acceptor_id="modal-demo-attempt",
         claim_deadline=str(now + 100),
+        connect_token="connect-token",
+        gateway_url="wss://gateway.example",
         sidecar_image_id="im-sidecar",
         sandbox_options={},
     )
@@ -562,6 +568,8 @@ def test_expired_claim_deadline_fails_before_creating_a_sandbox(monkeypatch, con
             session_id="devin-1",
             acceptor_id="modal-demo-attempt",
             claim_deadline="999",
+            connect_token="connect-token",
+            gateway_url="wss://gateway.example",
             sidecar_image_id="im-sidecar",
             sandbox_options={},
         )
@@ -603,6 +611,8 @@ def test_missing_cached_sidecar_is_evicted_for_the_next_scheduler(monkeypatch, c
             session_id="devin-1",
             acceptor_id="modal-demo-attempt",
             claim_deadline=None,
+            connect_token="connect-token",
+            gateway_url="wss://gateway.example",
             sidecar_image_id="im-deleted",
             sandbox_options={},
         )
@@ -627,7 +637,7 @@ class PollClient:
         if self.claim_error:
             raise self.claim_error
         self.claimed.append((session_id, acceptor_id))
-        return Claim("tomorrow")
+        return Claim("tomorrow", "connect-token", "wss://gateway.example")
 
     def release(self, session_id, acceptor_id):
         self.released.append((session_id, acceptor_id))

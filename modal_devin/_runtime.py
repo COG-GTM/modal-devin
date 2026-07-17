@@ -331,6 +331,8 @@ def _run_claimed_session(
     session_id: str,
     acceptor_id: str,
     claim_deadline: str | None,
+    connect_token: str | None,
+    gateway_url: str | None,
     sidecar_image_id: str,
     sandbox_options: Mapping[str, Any],
 ) -> None:
@@ -376,20 +378,26 @@ def _run_claimed_session(
             reserve_seconds=settings.claim_connect_margin_seconds,
         )
 
+        exec_env: dict[str, str | None] = {
+            "DEVIN_API_URL": f"http://caddy:{_SIDECAR_PORT}",
+            "DEVIN_OUTPOSTS_TOKEN": _DUMMY_TOKEN,
+        }
+        if connect_token is not None:
+            exec_env["DEVIN_REMOTE_SESSION_TOKEN"] = connect_token
+            if gateway_url is not None:
+                exec_env["DEVIN_OUTPOST_GATEWAY_URL"] = gateway_url
+
         process = sandbox.exec(
             _DEVIN_BIN,
             "worker",
             "start",
             "--session",
             session_id,
-            "--outpost",
+            "--pool",
             config.outpost_id,
             "--acceptor-id",
             acceptor_id,
-            env={
-                "DEVIN_API_URL": f"http://caddy:{_SIDECAR_PORT}",
-                "DEVIN_OUTPOSTS_TOKEN": _DUMMY_TOKEN,
-            },
+            env=exec_env,
             stderr=StreamType.STDOUT,
             timeout=settings.session_timeout_seconds,
         )
@@ -496,6 +504,8 @@ def execute_session(
             session_id=session_id,
             acceptor_id=acceptor_id,
             claim_deadline=claim.deadline,
+            connect_token=claim.connect_token,
+            gateway_url=claim.gateway_url,
             sidecar_image_id=sidecar_image_id,
             sandbox_options=sandbox_options,
         )

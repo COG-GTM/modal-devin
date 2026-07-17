@@ -5,6 +5,15 @@ and uses semantic versioning.
 
 ## Unreleased
 
+## 0.1.6 - 2026-07-16
+
+### Fixed
+
+- Worker images and session startup now target the current Devin CLI contract:
+  `--pool` identifies the outpost, and the claim's connect token is handed to the CLI
+  so it does not claim the same session twice. This replaces the unsupported
+  `--outpost` flag introduced in 0.1.5.
+
 ## 0.1.5 - 2026-07-16
 
 ### Fixed
