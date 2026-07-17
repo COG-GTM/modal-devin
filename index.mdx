@@ -24,13 +24,12 @@ Use it when you need:
 
 Outposts has two layers:
 
-1. The **worker** executes one Devin session. `modal-devin` runs it inside a Modal
-   Sandbox.
-2. The **orchestrator** finds queued sessions and manages their compute lifecycle.
-   `modal-devin` deploys this layer as a Modal application.
+1. The **worker** executes one Devin session inside a Modal Sandbox.
+2. The **orchestrator** finds queued sessions, manages their compute lifecycle, and
+   runs as a Modal application.
 
-Workers need outbound HTTPS access to Devin. They do not require inbound ports or a
-public IP.
+Workers need outbound HTTPS access to Devin and run without inbound ports or a public
+IP.
 
 ```mermaid
 flowchart LR
@@ -62,15 +61,12 @@ flowchart LR
 The setup command generates an ordinary Modal application in your project. Edit it
 to choose:
 
-- Project source, tools, and dependencies.
-- Modal Secrets available to your functions and workloads.
-- CPU, memory, region, retries, and schedule.
-- Session duration and snapshot retention.
+- Project source, tools, dependencies, and Modal Secrets for your functions and workloads.
+- CPU, memory, region, retries, schedule, session duration, and snapshot retention.
 - Application names, tags, and deployment policy.
 
 `modal-devin` handles queue consumption, worker startup, resumability, credentials,
-and cleanup. Those lifecycle mechanics do not need to be reimplemented in your
-application.
+and cleanup, leaving your application free of lifecycle reimplementation.
 
 ## Requirements
 

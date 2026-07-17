@@ -4,7 +4,7 @@ description: Create a Devin Outposts outpost and deploy its Modal orchestrator.
 icon: wand-magic-sparkles
 ---
 
-Use the setup wizard when you do not already have an outpost. It can configure
+Use the setup wizard when you need a new outpost. It can configure
 Modal, create the outpost, store the Devin token, generate the application, and
 deploy it.
 
@@ -17,8 +17,8 @@ uv add modal-devin
 ```
 
 You also need a Devin organization with Outposts enabled and a token authorized to
-create and serve outposts. The local Devin CLI is not required to run this wizard --
-`init` creates the outpost by calling the Devin Outposts API directly.
+create and serve outposts. This wizard runs without a local Devin CLI because `init`
+creates the outpost through the Devin Outposts API.
 
 <Steps>
   <Step title="Start the wizard">
@@ -40,8 +40,7 @@ create and serve outposts. The local Devin CLI is not required to run this wizar
 
   <Step title="Provide the Devin token">
     The wizard uses the token to create the outpost and offers to store it as a
-    Modal Secret. Input is hidden and the token is not written to the generated
-    application.
+    Modal Secret. Input is hidden, and the generated application excludes the token.
   </Step>
 
   <Step title="Deploy">

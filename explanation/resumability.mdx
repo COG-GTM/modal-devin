@@ -16,12 +16,12 @@ from the captured workspace.
 | New session | Latest deployed worker image |
 | Suspended session with a usable snapshot | Preserved session filesystem |
 | Suspended session whose snapshot expired | Latest deployed worker image |
-| Terminal session | No workspace is retained for another attempt |
+| Terminal session | Later attempts receive a fresh workspace |
 
 ## Redeploying an image
 
 A preserved filesystem is a complete session workspace. New packages or repository
-changes in a later base image are not merged into it automatically.
+changes in a later base image stay separate from it.
 
 This means:
 
@@ -45,11 +45,11 @@ workspace may no longer be available.
 
 ## Recovery after uncertainty
 
-If the worker exits but the final Devin state cannot be confirmed, `modal-devin`
+If the worker exits but the final Devin state remains unconfirmed, `modal-devin`
 attempts to preserve the workspace before reporting the invocation as failed. This
 favors recoverability over an uncertain success result.
 
 ## Duplicate safety
 
 Outposts and Modal can both retry delivery. `modal-devin` coordinates attempts so a
-duplicate does not run a second worker for a session already being served.
+duplicate avoids starting a second worker for an already served session.

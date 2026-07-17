@@ -26,8 +26,8 @@ orchestrator. The deployed Modal application watches that outpost.
 
 `modal-devin` gives every invocation a unique acceptor identity and coordinates with
 Outposts so only one worker serves an attempt. Modal may occasionally start duplicate
-invocations because delivery is retried; a duplicate that does not own the session
-exits safely. Startup waits are shortened when necessary to preserve time for the
+invocations because delivery is retried; a duplicate without session ownership exits
+safely. Startup waits are shortened when necessary to preserve time for the
 worker to connect before the server-assigned claim deadline.
 
 ## 3. The workspace starts

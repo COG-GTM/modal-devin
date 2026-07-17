@@ -32,7 +32,7 @@ uv run modal-devin doctor
   </Accordion>
 </AccordionGroup>
 
-## The image does not build
+## Image build failure
 
 <AccordionGroup>
   <Accordion title="A build operation appears after prepare_image()">
@@ -41,7 +41,7 @@ uv run modal-devin doctor
   </Accordion>
   <Accordion title="A standard tool fails to install">
     Retry once to rule out a transient network failure, then inspect the Modal build
-    output. The image cannot deploy until the failed dependency installs successfully.
+    output. Deployment can proceed after the failed dependency installs successfully.
   </Accordion>
 </AccordionGroup>
 
@@ -57,7 +57,7 @@ uv run modal-devin doctor
 5. Allow extra time for the first session while required images build.
 
 An invocation may also exit quickly when another worker has already accepted the
-same session. This is normal and does not interrupt the winning worker.
+same session. This is normal; the winning worker continues uninterrupted.
 
 ## A session invocation fails
 
@@ -67,7 +67,7 @@ same session. This is normal and does not interrupt the winning worker.
     before the error for the actionable failure.
   </Accordion>
   <Accordion title="SessionStatusUnknownError">
-    The runtime could not confirm a safe final state. It preserves the workspace when
+    The runtime was unable to confirm a safe final state. It preserves the workspace when
     possible so a later attempt can recover. Check preceding API errors and retry the
     session after the upstream issue is resolved.
   </Accordion>
@@ -82,13 +82,13 @@ same session. This is normal and does not interrupt the winning worker.
   </Accordion>
 </AccordionGroup>
 
-## A session does not resume
+## Session resumption failure
 
 If a stored filesystem snapshot expired or became unavailable, the next attempt
 starts from the current base image. Check snapshot retention and confirm that the
 deployment remained active while resumability was required.
 
-For a legitimately large workspace that cannot be preserved within the configured
+For a legitimately large workspace that exceeds the configured preservation
 time, increase `MODAL_DEVIN_SNAPSHOT_TIMEOUT_SECONDS` or remove disposable caches and
 generated files.
 

@@ -66,14 +66,14 @@ You need a deployed `modal-devin` application from
 </Steps>
 
 <Warning>
-  Keep every image build operation before `prepare_image()`. Do not change the
-  generated image wiring elsewhere in the application.
+  Keep every image build operation before `prepare_image()` and leave the generated
+  image wiring unchanged elsewhere in the application.
 </Warning>
 
 ## Optional tools
 
-Chrome and FFmpeg are included by default. Disable either when the workload does not
-need it:
+Chrome and FFmpeg are included by default. Disable either when the workload has no
+need for it:
 
 ```python
 base_image = worker.base_image(

@@ -23,11 +23,10 @@ image unchanged.
 
 `base_image()` includes:
 
-- Git, curl, CA certificates, and tar.
-- The Devin CLI.
+- Git, curl, CA certificates, tar, and the Devin CLI.
 - `/root/workspace` as the managed working directory.
 - FFmpeg by default for screen recording.
 - Chromium by default for browser and computer-use features.
 
-Use `install_ffmpeg=False` or `install_chrome=False` when those features are not
-needed.
+Disable `install_ffmpeg` or `install_chrome` when the corresponding feature is
+unneeded.

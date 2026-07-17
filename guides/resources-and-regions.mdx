@@ -54,7 +54,7 @@ def session(session_id: str) -> None:
 ```
 
 These are two different placements: the function's `region` places the lightweight
-orchestration call itself, while the Sandbox's `region` places where Devin actually
+orchestration call itself, while the Sandbox's `region` places where Devin
 runs commands and edits files. Most deployments only need to set `region` on the
 Sandbox. Set it on the function too only when you also want the orchestration call
 co-located, for example alongside a database or internal service it depends on. When
@@ -63,8 +63,8 @@ workspace.
 
 ## Managed options
 
-Do not pass a positional command or override `timeout`, `workdir`, or
-`readiness_probe` through `run_session()`. `modal-devin` manages those values so it
+Pass only keyword options other than `timeout`, `workdir`, or `readiness_probe` to
+`run_session()`. `modal-devin` manages those values so it
 can start, preserve, and clean up the session safely.
 
 Use [`WorkerSettings`](/reference/settings) to change supported lifecycle timing.

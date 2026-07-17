@@ -67,17 +67,17 @@
     "links": [
       {
         "label": "GitHub",
-        "href": "https://github.com/aaazzam/modal-devin"
+        "href": "https://github.com/modal-labs/modal-devin"
       }
     ],
     "primary": {
       "type": "github",
-      "href": "https://github.com/aaazzam/modal-devin"
+      "href": "https://github.com/modal-labs/modal-devin"
     }
   },
   "footer": {
     "socials": {
-      "github": "https://github.com/aaazzam/modal-devin"
+      "github": "https://github.com/modal-labs/modal-devin"
     }
   },
   "contextual": {

@@ -31,9 +31,9 @@ Common outcomes:
 | What you see | What it usually means |
 | --- | --- |
 | No invocation starts | The outpost, credential, deployment, or queue needs attention |
-| An invocation exits immediately without an error | Another worker already accepted that session |
-| `WorkerExitedError` | The Devin worker returned a nonzero status; inspect the preceding output |
-| `SessionStatusUnknownError` | Final state could not be confirmed; recovery data was preserved when possible |
+| An invocation exits immediately with no error | Another worker already accepted that session |
+| `WorkerExitedError` | The Devin worker returned a nonzero status; inspect preceding output |
+| `SessionStatusUnknownError` | Final state remained unconfirmed; recovery data was preserved when possible |
 
 ## Deploy configuration changes
 
@@ -54,12 +54,11 @@ dispatch the same pending session, but the Outposts atomic claim permits only on
 session invocation to serve it. Local dispatch leases reduce duplicate Modal work
 during rolling deployment overlap.
 
-Do not stop the Modal application before redeploying it. `modal app stop` permanently
-terminates its running containers, including active session invocations; deploying
-afterward creates a new application rather than performing a rolling update.
+Keep the Modal application running before redeploying it. `modal app stop` permanently
+terminates running containers, including active session invocations; a subsequent deployment
+creates a new application instead of performing a rolling update.
 
-Do not rerun `init` over an existing file; it intentionally refuses to overwrite
-application code.
+Run `init` only for a new file; it preserves existing application code.
 
 ## Rotate the Devin token
 

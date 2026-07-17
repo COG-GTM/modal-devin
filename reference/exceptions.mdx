@@ -19,7 +19,7 @@ redeploy.
 
 ## `ModalCompatibilityError`
 
-The installed Modal SDK does not provide a capability required by this release. Run
+This release requires a Modal SDK capability missing from the installed version. Run
 `modal-devin doctor`, then install a supported Modal version.
 
 ## `OutpostsAPIError`
@@ -29,13 +29,12 @@ behavior. Check the credential, outpost, configured API URL, and preceding netwo
 
 ## `OutpostsProtocolError`
 
-Devin returned a response that this release could not handle safely. Check release
-compatibility and the original response error; do not treat the affected invocation
-as successful.
+Devin returned a response outside this release's safe handling range. Check release
+compatibility and the original response error; mark the affected invocation as failed.
 
 ## `SessionStatusUnknownError`
 
-The worker exited, but `modal-devin` could not confirm a safe final session state. It
+The worker exited, but `modal-devin` was unable to confirm a safe final session state. It
 attempts to preserve the filesystem before raising. Resolve the preceding API or
 compatibility problem, then retry or resume the session.
 

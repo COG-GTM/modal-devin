@@ -60,7 +60,8 @@ Generates one Python application in `OUTPOSTS_DIR`. In an interactive terminal, 
 </ParamField>
 
 <ParamField path="--deploy / --no-deploy" type="boolean">
-  Deploy or skip deployment after generation. When omitted interactively, the wizard prompts. When omitted non-interactively, it does not deploy.
+  Deploy or skip deployment after generation. The wizard prompts in interactive use;
+  non-interactive use skips deployment when this option is omitted.
 </ParamField>
 
 ### Output filename
@@ -78,14 +79,12 @@ For example, `Frontend / Prod` becomes `outposts/frontend_prod.py`.
 
 Depending on answers and existing state, the wizard may:
 
-1. Run `modal setup`.
-2. Create a new outpost by calling `POST /opbeta/outposts` on the Devin Outposts API directly.
-3. Create a named Modal Secret directly through the Modal SDK.
-4. Write the generated application.
-5. Deploy it with Modal.
+1. Run `modal setup` and create an outpost through `POST /opbeta/outposts` on the Devin Outposts API.
+2. Create a named Modal Secret directly through the Modal SDK.
+3. Write the generated application and optionally deploy it with Modal.
 
-The credential stays in memory during Secret creation. It is not passed in a
-subprocess argument or written to a local file.
+The credential stays in memory during Secret creation rather than appearing in a
+subprocess argument or local file.
 
 ### Setup safety
 
@@ -141,8 +140,8 @@ When deploying a single file:
 uv run modal-devin deploy outposts/my_outpost.py
 ```
 
-When deploying every outpost in a directory, each file is deployed in turn even if an
-earlier one fails; the command exits nonzero afterward listing every outpost that
+When deploying every outpost in a directory, each file is deployed sequentially even if an
+earlier one fails; the command exits nonzero afterward and lists every outpost that
 failed:
 
 ```bash
@@ -176,9 +175,8 @@ The command checks:
 
 The last check reads each outpost file's `Worker.from_env(...)` call to determine its
 expected Modal app name, without executing the file, and looks it up with
-`modal.App.lookup`. Files whose app name can't be determined statically (for example,
+`modal.App.lookup`. Files whose app name cannot be determined statically (for example,
 heavily hand-edited files) print a warning instead of failing.
 
-`doctor` doesn't check for a local Devin CLI: `init` creates outposts with a direct
-Devin Outposts API call, and the Devin CLI itself is only needed inside the deployed
-worker image at runtime, not on your machine.
+`doctor` has no local Devin CLI prerequisite: `init` creates outposts with a direct
+Devin Outposts API call, and only the deployed worker image needs the Devin CLI at runtime.

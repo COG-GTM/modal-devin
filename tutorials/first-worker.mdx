@@ -11,8 +11,7 @@ At the end, sessions assigned to that outpost can run inside Modal Sandboxes.
 
 You need:
 
-- [uv](https://docs.astral.sh/uv/) and Python 3.11 or newer.
-- A [Modal account](https://modal.com/docs/guide/modal-user-account-setup).
+- [uv](https://docs.astral.sh/uv/), Python 3.11 or newer, and a [Modal account](https://modal.com/docs/guide/modal-user-account-setup).
 - A Devin organization with Outposts enabled.
 - An outpost ID such as `outpost_env-...`.
 - A Devin token authorized to manage the outpost and serve its sessions.
@@ -27,7 +26,7 @@ You need:
   </Step>
 
   <Step title="Configure Modal">
-    If Modal is not already configured on this machine, run
+    Configure Modal on this machine by running
     [`modal setup`](https://modal.com/docs/cli/latest/setup):
 
     ```bash
@@ -44,12 +43,11 @@ You need:
       --no-deploy
     ```
 
-    If the expected [Modal Secret](https://modal.com/docs/guide/secrets) does not
-    exist, the wizard prompts for the Devin token and offers to create it. The token
-    is entered without echo and is not written to the generated Python file.
+    If the expected [Modal Secret](https://modal.com/docs/guide/secrets) is absent,
+    the wizard prompts for the Devin token and offers to create it. Token entry has no
+    echo, and the generated Python file excludes the token.
 
-    The command writes `outposts/my_outpost.py`. It will not overwrite an existing
-    file.
+    The command writes `outposts/my_outpost.py` and preserves any existing file.
   </Step>
 
   <Step title="Check the prerequisites">

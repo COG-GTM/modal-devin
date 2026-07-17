@@ -5,8 +5,8 @@ icon: shield-halved
 ---
 
 `modal-devin` reduces where long-lived credentials appear and fails conservatively
-when it cannot establish a safe session state. It does not make an arbitrary session
-workload incapable of using the Outposts capability assigned to it.
+when it cannot establish a safe session state. An arbitrary session workload can still
+use its assigned Outposts capability.
 
 ## Devin credential boundary
 
@@ -23,7 +23,7 @@ allowed Outposts capability, so:
 
 - Use a least-privilege Devin service user.
 - Separate outposts and credentials for different trust environments.
-- Do not expose unrelated credentials to the session workload.
+- Limit the session workload to credentials required for its work.
 
 ## Token handling during setup
 
@@ -32,7 +32,7 @@ The interactive setup:
 - Prompts without echo.
 - Avoids placing the token in subprocess arguments.
 - Stores it in a named Modal Secret when approved.
-- Does not write it into the generated application.
+- Excludes it from the generated application.
 
 Avoid supplying tokens directly in shell commands, checked-in files, or clone URLs.
 
@@ -45,8 +45,8 @@ internal services the session is allowed to reach.
 
 ## Recovery behavior
 
-When final session state is unavailable or unrecognized, `modal-devin` does not assume
-the work completed successfully. It attempts to preserve the filesystem and reports a
+When final session state is unavailable or unrecognized, `modal-devin` treats the work
+as incomplete. It attempts to preserve the filesystem and reports a
 failure so the condition remains visible to monitoring while the durable recovery
 snapshot remains available to a later claim attempt.
 
@@ -59,6 +59,6 @@ project releases for dependency and compatibility updates.
 ## Report a vulnerability
 
 Use [GitHub private vulnerability reporting](https://github.com/aaazzam/modal-devin/security).
-Do not include live Devin, Modal, or repository credentials. Include the affected
+Exclude live Devin, Modal, and repository credentials. Include the affected
 version, reproduction steps, expected impact, and whether a credential or workload
 may have been exposed.

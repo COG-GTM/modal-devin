@@ -43,7 +43,7 @@ base_image = (
 image = worker.prepare_image(base_image)
 ```
 
-Do not put credentials in image environment variables. Attach a
+Keep credentials out of image environment variables. Attach a
 [Modal Secret](https://modal.com/docs/guide/secrets) to the operation or function that
 needs it.
 
@@ -82,5 +82,5 @@ For the complete list of what the standard image includes, see the
 
 <Warning>
   Keep `prepare_image()` last. A resumed session uses its preserved filesystem;
-  redeploying a new base image does not modify an existing suspended workspace.
+  redeploying a new base image leaves an existing suspended workspace unchanged.
 </Warning>

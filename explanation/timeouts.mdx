@@ -15,7 +15,7 @@ allowing long-running Devin sessions to remain connected.
 
 ## Why the Modal timeout is longer
 
-Stopping the worker is not the end of the session lifecycle. The Sandbox may still
+Stopping the worker begins the final phase of the session lifecycle. The Sandbox may still
 need time to start, confirm the final Devin state, preserve a filesystem, and clean up.
 
 The generated application therefore uses a derived function timeout:
@@ -29,15 +29,15 @@ recovery timing changes.
 
 ## Tune safely
 
-1. Set `session_timeout_seconds` for the longest worker run you want to allow.
-2. Keep the generated function timeout property unchanged.
-3. Change readiness or snapshot timing only when logs identify that specific phase
+1. Set `session_timeout_seconds` for the longest worker run you want to allow, then
+   keep the generated function timeout property unchanged.
+2. Change readiness or snapshot timing only when logs identify that specific phase
    as the bottleneck.
-4. Change API retry timing only for a known network or upstream reliability need.
+3. Change API retry timing only for a known network or upstream reliability need.
 
 <Warning>
-  Do not pass `timeout=` through `run_session()`. An independent Sandbox timeout can
-  interrupt recovery or cleanup.
+  Omit `timeout=` from `run_session()`. An independent Sandbox timeout can interrupt
+  recovery or cleanup.
 </Warning>
 
 For every available advanced control and its default, see the
