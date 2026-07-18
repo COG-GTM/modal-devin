@@ -1,77 +1,24 @@
 ---
-title: Deploy your first worker
-description: Connect an existing Devin Outposts outpost to Modal and verify a session.
+title: Verify your first worker
+description: Verify the outpost and Modal application created by the setup wizard.
 icon: play
 ---
 
-This tutorial deploys the `modal-devin` orchestrator for an existing outpost.
-At the end, sessions assigned to that outpost can run inside Modal Sandboxes.
+This tutorial verifies the outpost and Modal application created by the interactive
+setup wizard.
 
 ## Before you begin
 
-You need:
+Complete [Create an outpost interactively](/tutorials/create-an-outpost), including
+accepting **Deploy now?** at the final prompt.
 
-- [uv](https://docs.astral.sh/uv/), Python 3.11 or newer, and a [Modal account](https://modal.com/docs/guide/modal-user-account-setup).
-- A Devin organization with Outposts enabled.
-- An outpost ID such as `outpost_env-...`.
-- A Devin token authorized to manage the outpost and serve its sessions.
-
-<Steps>
-  <Step title="Install modal-devin">
-    Run this in the Python project that will own the Modal application:
-
-    ```bash
-    uv add modal-devin
-    ```
-  </Step>
-
-  <Step title="Configure Modal">
-    Configure Modal on this machine by running
-    [`modal setup`](https://modal.com/docs/cli/latest/setup):
-
-    ```bash
-    uv run modal setup
-    ```
-  </Step>
-
-  <Step title="Generate the application">
-    Replace the sample ID with your outpost ID:
-
-    ```bash
-    uv run modal-devin init my-outpost \
-      --outpost-id outpost_env-... \
-      --no-deploy
-    ```
-
-    If the expected [Modal Secret](https://modal.com/docs/guide/secrets) is absent,
-    the wizard prompts for the Devin token and offers to create it. Token entry has no
-    echo, and the generated Python file excludes the token.
-
-    The command writes `outposts/my_outpost.py` and preserves any existing file.
-  </Step>
-
-  <Step title="Check the prerequisites">
-    ```bash
-    uv run modal-devin doctor
-    ```
-
-    Resolve any reported credential, SDK, or Secret problem before deploying.
-  </Step>
-
-  <Step title="Deploy">
-    ```bash
-    uv run modal-devin deploy outposts/my_outpost.py
-    ```
-
-    The first deployment or first session can take longer while Modal builds the
-    required images. Later starts reuse those build results when possible.
-  </Step>
-</Steps>
-
-## Verify the deployment
+## Start a session
 
 Create or resume a Devin session and select the outpost you deployed. Then
 open the Modal application logs.
+
+The first session can take longer while Modal builds the required images. Later
+starts reuse those build results when possible.
 
 <Check>
   The deployment is working when a session invocation starts and its logs show the

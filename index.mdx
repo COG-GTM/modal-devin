@@ -55,32 +55,22 @@ flowchart LR
 
 ## Get started
 
-<Columns cols={2}>
-  <Card title="Create a new outpost" icon="wand-magic-sparkles" href="/tutorials/create-an-outpost">
-    Run one guided command to register an outpost, generate your app, and deploy it.
-  </Card>
-  <Card title="Deploy an existing outpost" icon="play" href="/tutorials/first-worker">
-    Connect an outpost ID to a verified Modal deployment.
-  </Card>
-  <Card title="Build the workspace" icon="code" href="/tutorials/custom-workspace">
-    Add project source, tools, packages, data, or Volumes to every session.
-  </Card>
-  <Card title="Configure compute" icon="microchip" href="/guides/resources-and-regions">
-    Choose the compute, GPU, memory, and placement for session workloads.
-  </Card>
-</Columns>
-
-## Your generated Modal application
-
-Run the guided setup from the project that will own the outpost:
+Run the interactive setup wizard from the project that will own the outpost:
 
 ```bash
-uvx run modal-devin init
+uvx modal-devin init
 ```
 
-It creates an outpost, writes a minimal Modal application to your repository, and can
-deploy it immediately. The generated application is ordinary code you own: customize
-it as your workloads evolve.
+The wizard configures Modal if needed, creates the outpost, stores its Devin
+credential as a Modal Secret, writes a minimal Modal application to your repository,
+and deploys it. The generated application is ordinary code you own: customize it as
+your workloads evolve.
+
+<Card title="Run the interactive setup" icon="wand-magic-sparkles" href="/tutorials/create-an-outpost" horizontal>
+  See each prompt and what the wizard creates.
+</Card>
+
+## Your generated Modal application
 
 You choose:
 
@@ -99,12 +89,12 @@ Outposts lifecycle.
 
 ## Requirements
 
+- [uv](https://docs.astral.sh/uv/getting-started/installation/).
 - Python 3.11 or newer.
-- A Modal account with locally configured credentials.
+- A Modal account; the wizard can configure local credentials.
 - A Devin organization with Outposts enabled.
-- An existing outpost ID, or permission to create one through the setup wizard.
-- A Devin token authorized to manage the outpost and serve its sessions.
+- A Devin token authorized to create and serve outposts.
 
-<Card title="Deploy your first worker" icon="arrow-right" href="/tutorials/first-worker" horizontal>
-  Follow the shortest path from installation to a verified deployment.
+<Card title="Verify your first worker" icon="arrow-right" href="/tutorials/first-worker" horizontal>
+  Confirm the deployment by starting a Devin session.
 </Card>

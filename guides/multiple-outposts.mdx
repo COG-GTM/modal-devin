@@ -9,17 +9,14 @@ configuration, and resumable work independent.
 
 ## Generate each application
 
-```bash
-uv run modal-devin init frontend \
-  --outpost-id outpost_env-frontend \
-  --no-deploy
+Run the same interactive wizard once for each outpost:
 
-uv run modal-devin init backend \
-  --outpost-id outpost_env-backend \
-  --no-deploy
+```bash
+uvx modal-devin init
 ```
 
-This creates:
+Choose a unique name in each run and accept deployment when prompted. Two runs named
+`frontend` and `backend` create:
 
 ```text
 outposts/
@@ -37,15 +34,10 @@ devin_secret = modal.Secret.from_name("devin-outposts-token")
 ```
 
 Use separate Secrets when outposts represent different
-[Modal Environments](https://modal.com/docs/guide/environments) or trust domains:
-
-```bash
-uv run modal-devin init production \
-  --outpost-id outpost_env-production \
-  --secret-name production-devin-token
-```
-
-The selected credential must be authorized for the corresponding outpost.
+[Modal Environments](https://modal.com/docs/guide/environments) or trust domains.
+Create the additional Secret in Modal, update `modal.Secret.from_name(...)` in that
+outpost's generated application, and redeploy it. The selected credential must be
+authorized for the corresponding outpost.
 
 ## Customize independently
 

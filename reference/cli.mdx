@@ -4,17 +4,15 @@ description: Complete reference for modal-devin init, deploy, doctor, and global
 icon: terminal
 ---
 
-The `modal-devin` CLI generates and operates the user-owned Modal application. Run it through the project's environment:
+For first-time setup, use the interactive wizard:
 
 ```bash
-uv run modal-devin COMMAND
+uvx modal-devin init
 ```
 
-The package module is an equivalent entrypoint:
-
-```bash
-uv run python -m modal_devin COMMAND
-```
+It guides you through Modal configuration, outpost and Secret creation, application
+generation, and deployment. The commands and options below are reference material
+for operating or automating an existing installation, not additional setup paths.
 
 ## Global commands
 
@@ -95,22 +93,7 @@ subprocess argument or local file.
 ### Examples
 
 ```bash
-# Interactive setup
-uv run modal-devin init
-
-# Generate from an existing outpost
-uv run modal-devin init my-outpost --outpost-id outpost_env-...
-
-# Generate to another directory without deploying
-uv run modal-devin init my-outpost \
-  --outpost-id outpost_env-... \
-  --outposts-dir deployments \
-  --no-deploy
-
-# Generate and deploy non-interactively
-uv run modal-devin init my-outpost \
-  --outpost-id outpost_env-... \
-  --deploy
+uvx modal-devin init
 ```
 
 ## `modal-devin deploy`

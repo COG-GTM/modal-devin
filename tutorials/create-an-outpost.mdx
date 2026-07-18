@@ -10,20 +10,15 @@ deploy it.
 
 ## Before you begin
 
-Install the package:
-
-```bash
-uv add modal-devin
-```
-
-You also need a Devin organization with Outposts enabled and a token authorized to
-create and serve outposts. This wizard runs without a local Devin CLI because `init`
-creates the outpost through the Devin Outposts API.
+You need [uv](https://docs.astral.sh/uv/getting-started/installation/), Python 3.11
+or newer, a Modal account, and a Devin organization with Outposts enabled. Have a
+Devin token authorized to create and serve outposts ready; the wizard asks for it
+without echoing it.
 
 <Steps>
   <Step title="Start the wizard">
     ```bash
-    uv run modal-devin init
+    uvx modal-devin init
     ```
   </Step>
 
@@ -44,41 +39,23 @@ creates the outpost through the Devin Outposts API.
   </Step>
 
   <Step title="Deploy">
-    Accept **Deploy now?** or deploy the generated file later:
-
-    ```bash
-    uv run modal-devin deploy outposts/<generated_name>.py
-    ```
+    Accept **Deploy now?** The wizard deploys the generated Modal application and
+    prints the result.
   </Step>
 </Steps>
 
 ## If setup fails
 
 The wizard avoids overwriting existing files and reports any remote resource that
-may need cleanup. Follow the printed recovery step, then rerun the command after the
-underlying problem is fixed.
-
-## Automate setup
-
-For non-interactive use, provide a name and an existing outpost ID:
-
-```bash
-uv run modal-devin init ci-outpost \
-  --outpost-id outpost_env-... \
-  --secret-name ci-devin-token \
-  --outposts-dir deployments \
-  --no-deploy
-```
-
-When `--outpost-id` is omitted, `init` creates a new outpost by calling the Devin
-Outposts API directly. In a non-interactive environment, make sure
-`DEVIN_OUTPOSTS_TOKEN` is set so the request can be authorized.
-
-See the complete [`init` option reference](/reference/cli#modal-devin-init).
+may need cleanup. Follow the printed recovery step, then run
+`uvx modal-devin init` again after fixing the underlying problem.
 
 ## Next steps
 
 <Columns cols={2}>
+  <Card title="Verify the worker" icon="circle-check" href="/tutorials/first-worker">
+    Start a Devin session on the new outpost.
+  </Card>
   <Card title="Build the workspace" icon="folder-code" href="/tutorials/custom-workspace">
     Add source code and tools to new sessions.
   </Card>

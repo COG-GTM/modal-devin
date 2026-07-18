@@ -32,7 +32,7 @@ dependencies = [
 Repository = "https://github.com/aaazzam/modal-devin"
 Issues = "https://github.com/aaazzam/modal-devin/issues"
 Changelog = "https://github.com/aaazzam/modal-devin/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/aaazzam/modal-devin#readme"
+Documentation = "https://modal.com/docs/devin"
 
 [project.scripts]
 modal-devin = "modal_devin.cli:run"
