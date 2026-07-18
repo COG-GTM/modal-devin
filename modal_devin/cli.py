@@ -499,15 +499,40 @@ def init_worker(
     """Scaffold a Modal application for Devin Outposts."""
     interactive = _interactive()
 
+    if interactive:
+        _console.print()
+        if outpost_id:
+            _console.print("[bold]Let's connect your Devin Outpost to Modal[/bold]")
+            _console.print(
+                "[dim]We'll generate its Modal app, connect the credentials, and help you "
+                "deploy it.[/dim]"
+            )
+        else:
+            _console.print("[bold]Let's create a new Devin Outpost[/bold]")
+            _console.print(
+                "[dim]We'll choose a name, connect Devin to Modal, and help you deploy it.[/dim]"
+            )
+        _console.print()
+
     if interactive and not _modal_is_configured() and _confirm("Set up Modal now?", default=True):
         subprocess.run([sys.executable, "-m", "modal", "setup"])
         if _modal_is_configured():
             _done("Modal is set up")
 
+    if interactive and not name:
+        _console.print(
+            "[dim]Choose a name people will recognize when selecting a machine in Devin, "
+            "like gpu-h200 or production-vpc.[/dim]"
+        )
     while not name:
         if not interactive:
             raise SystemExit("NAME is required (pass it as an argument, or run interactively)")
-        name = _ask("What is your outpost named?")
+        question = (
+            "What would you like to call this outpost?"
+            if outpost_id
+            else "What would you like to name your new outpost?"
+        )
+        name = _ask(question)
 
     if not secret_name.strip():
         raise SystemExit("secret_name must not be empty")
@@ -540,10 +565,10 @@ def init_worker(
         token = os.environ.get("DEVIN_OUTPOSTS_TOKEN")
         if not token and interactive:
             _console.print(
-                "[dim]Create a key for an admin-scoped Enterprise service user: "
-                f"{DEVIN_TOKEN_URL}[/dim]"
+                "[dim]To create the outpost, paste a key from an admin-scoped Devin Enterprise "
+                f"service user. Create one at {DEVIN_TOKEN_URL}[/dim]"
             )
-            token = _ask("Admin-scoped Devin Enterprise service user key", password=True)
+            token = _ask("Paste your Devin service user key", password=True)
         if not token:
             raise SystemExit(
                 "DEVIN_OUTPOSTS_TOKEN is required to create a new outpost and must contain "
@@ -595,17 +620,16 @@ def init_worker(
     elif interactive:
         if not token:
             _console.print(
-                "[dim]Create a key for an admin-scoped Enterprise service user: "
-                f"{DEVIN_TOKEN_URL}[/dim]"
+                "[dim]To run the outpost, Modal needs a key from an admin-scoped Devin "
+                f"Enterprise service user. Create one at {DEVIN_TOKEN_URL}[/dim]"
             )
             token = _ask(
-                "Admin-scoped Devin Enterprise service user key "
-                "[dim](leave blank to skip)[/dim]",
+                "Paste your Devin service user key [dim](leave blank to skip)[/dim]",
                 password=True,
                 default="",
                 show_default=False,
             )
-        if token and _confirm(f"Create Modal secret {secret_name} now?", default=True):
+        if token and _confirm(f"Save this key in Modal as {secret_name}?", default=True):
             _step_start(f"Creating Modal secret {secret_name}...")
             try:
                 _create_modal_secret(secret_name, token)
@@ -627,7 +651,7 @@ def init_worker(
         if deploy is not None
         else interactive
         and _confirm(
-            f"Deploy {name} now?",
+            f"Deploy {name} to Modal now?",
             default=True,
         )
     )
@@ -636,11 +660,14 @@ def init_worker(
         returncode = _modal_deploy(out_path)
         if returncode == 0:
             _done(f"Deployed [bold]{name}[/bold]")
+            _console.print()
+            _console.print(f"[bold green]Your outpost {escape(name)} is ready.[/bold green]")
         else:
             _console.print(f"[bold red]✖[/bold red] modal deploy failed (exit code {returncode})")
             raise SystemExit(returncode)
     else:
-        _console.print(f"[dim]then:[/dim] modal-devin deploy [cyan]{escape(str(out_path))}[/cyan]")
+        _console.print("[dim]When you're ready, deploy with:[/dim]")
+        _console.print(f"  modal-devin deploy [cyan]{escape(str(out_path))}[/cyan]")
 
 
 @app.command

@@ -457,6 +457,51 @@ def _forbid_remote_outpost_calls(monkeypatch):
     monkeypatch.setattr(cli.OutpostsClient, "delete_outpost", boom)
 
 
+@pytest.mark.parametrize(
+    ("outpost_id", "heading", "question"),
+    [
+        (
+            "",
+            "Let's create a new Devin Outpost",
+            "What would you like to name your new outpost?",
+        ),
+        (
+            "outpost_env-existing",
+            "Let's connect your Devin Outpost to Modal",
+            "What would you like to call this outpost?",
+        ),
+    ],
+)
+def test_interactive_init_frames_whether_the_outpost_is_new(
+    tmp_path, monkeypatch, outpost_id, heading, question
+):
+    monkeypatch.setattr(cli, "_interactive", lambda: True)
+    monkeypatch.setattr(cli, "_modal_is_configured", lambda: True)
+    monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
+    monkeypatch.setattr(cli, "_erase_last_line", lambda: None)
+    monkeypatch.setenv("DEVIN_OUTPOSTS_TOKEN", "super-secret-token")
+    monkeypatch.setattr(
+        cli,
+        "OutpostsClient",
+        lambda *args, **kwargs: SimpleNamespace(create_outpost=lambda name: "outpost_env-new"),
+    )
+    ask = Mock(return_value="gpu-h200")
+    confirm = Mock(return_value=False)
+    printed = Mock()
+    monkeypatch.setattr(cli, "_ask", ask)
+    monkeypatch.setattr(cli, "_confirm", confirm)
+    monkeypatch.setattr(cli._console, "print", printed)
+
+    cli.init_worker(outpost_id=outpost_id, outposts_dir=tmp_path)
+
+    ask.assert_called_once_with(question)
+    output = "\n".join(str(item.args[0]) for item in printed.call_args_list if item.args)
+    assert heading in output
+    assert "selecting a machine in Devin" in output
+    assert "gpu-h200 or production-vpc" in output
+    confirm.assert_called_once_with("Deploy gpu-h200 to Modal now?", default=True)
+
+
 def test_init_rejects_invalid_api_url_before_remote_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_interactive", lambda: False)
     _forbid_remote_outpost_calls(monkeypatch)
