@@ -5,6 +5,8 @@ and uses semantic versioning.
 
 ## Unreleased
 
+## 0.1.9 - 2026-07-18
+
 ### Added
 
 - `modal-devin destroy` safely stops the Modal apps declared by one or all generated
