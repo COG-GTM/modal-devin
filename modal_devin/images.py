@@ -73,6 +73,7 @@ _SIDECAR_RECIPE_DIGEST = hashlib.sha256(
 _DUMMY_TOKEN = "cog_sidecarmanaged00000000000000000000000000000000"
 _SIDECAR_PORT = 8686
 _CHROME_PATH = "/usr/bin/chromium"
+_LOGFIRE_REQUIREMENT = "logfire>=4.2,<5"
 
 
 class _SidecarManager(Protocol):
@@ -114,14 +115,16 @@ def _worker_image(
 
 def _controller_image(*, python_version: str = "3.12") -> modal.Image:
     """Return a small image for scheduler and other control-plane functions."""
-    return modal.Image.debian_slim(python_version=python_version).add_local_python_source(
-        "modal_devin"
+    return (
+        modal.Image.debian_slim(python_version=python_version)
+        .uv_pip_install(_LOGFIRE_REQUIREMENT)
+        .add_local_python_source("modal_devin")
     )
 
 
 def _finalize_worker_image(image: modal.Image) -> modal.Image:
     """Add modal-devin source as the final, startup-mounted image operation."""
-    return image.add_local_python_source("modal_devin")
+    return image.uv_pip_install(_LOGFIRE_REQUIREMENT).add_local_python_source("modal_devin")
 
 
 def _sidecar_image() -> modal.Image:

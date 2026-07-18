@@ -25,6 +25,7 @@ classifiers = [
 dependencies = [
     "modal>=1.5.1,<2",
     "cyclopts>=4.20",
+    "logfire>=4.2,<5",
     "rich>=13.6",
 ]
 

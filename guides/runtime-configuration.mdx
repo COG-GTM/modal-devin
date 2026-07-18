@@ -28,6 +28,37 @@ MODAL_DEVIN_LOG_LEVEL=DEBUG
 
 `none` and `null`, in any letter case, both mean indefinite snapshot retention.
 
+## Trace sessions with OpenTelemetry
+
+The scheduler and session runtimes include Pydantic Logfire instrumentation. Every
+scheduler poll creates a trace, and each dispatched session continues that trace
+through claim acquisition, Sandbox and sidecar startup, the Devin worker process,
+final status handling, and claim release. The handoff uses a W3C OpenTelemetry trace
+carrier stored with the short-lived dispatch lease, so it crosses the remote Modal
+function boundary without changing the generated function signature.
+
+To send traces to Pydantic Logfire, add `LOGFIRE_TOKEN` to the Modal Secret attached
+to both generated functions. The existing generated Secret reference can contain both
+credentials:
+
+```text
+DEVIN_OUTPOSTS_TOKEN=...
+LOGFIRE_TOKEN=...
+LOGFIRE_ENVIRONMENT=production
+```
+
+Logfire only sends to its hosted service when a token is present. To use another
+OpenTelemetry-compatible backend, omit `LOGFIRE_TOKEN` and configure its OTLP/HTTP
+endpoint instead:
+
+```text
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otel-collector.example.com
+```
+
+The service name is the worker's generated Modal app name. Useful span attributes
+include `devin.session.id`, `modal_devin.outpost.id`, `modal_devin.worker.name`, and
+`modal.function.name`.
+
 ## Configure in Python
 
 Use `WorkerSettings` when configuration belongs in version control:

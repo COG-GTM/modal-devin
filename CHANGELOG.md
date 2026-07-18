@@ -5,6 +5,15 @@ and uses semantic versioning.
 
 ## Unreleased
 
+### Added
+
+- The scheduler and session runtimes emit OpenTelemetry traces through Pydantic
+  Logfire. Every scheduler poll starts a trace that each dispatched session
+  continues across the Modal function boundary through claim acquisition, Sandbox
+  and sidecar startup, the Devin worker process, finalization, and claim release.
+  Add `LOGFIRE_TOKEN` to the shared Modal Secret to send traces to Logfire, or set
+  `OTEL_EXPORTER_OTLP_ENDPOINT` for any other OpenTelemetry-compatible backend.
+
 ## 0.1.8 - 2026-07-17
 
 ### Changed

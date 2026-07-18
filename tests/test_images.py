@@ -13,9 +13,11 @@ from modal_devin.images import (
     _DEVIN_BIN,
     _DEVIN_CLI_CONTRACT_CHECK,
     _DEVIN_CLI_INSTALL,
+    _LOGFIRE_REQUIREMENT,
     _SIDECAR_RECIPE_DIGEST,
     _controller_image,
     _create_sidecar,
+    _finalize_worker_image,
     _sidecar_image,
     _worker_image,
 )
@@ -55,6 +57,24 @@ def test_controller_image_is_small_and_contains_the_runtime_source():
     assert "local files" in representation
     assert "chromium" not in representation
     assert "ffmpeg" not in representation
+
+
+def test_runtime_images_install_logfire(monkeypatch):
+    controller = Mock()
+    controller.uv_pip_install.return_value = controller
+    controller.add_local_python_source.return_value = controller
+    monkeypatch.setattr(modal.Image, "debian_slim", Mock(return_value=controller))
+
+    assert _controller_image() is controller
+    controller.uv_pip_install.assert_called_once_with(_LOGFIRE_REQUIREMENT)
+
+    worker = Mock()
+    instrumented_worker = Mock()
+    worker.uv_pip_install.return_value = instrumented_worker
+    instrumented_worker.add_local_python_source.return_value = instrumented_worker
+
+    assert _finalize_worker_image(worker) is instrumented_worker
+    worker.uv_pip_install.assert_called_once_with(_LOGFIRE_REQUIREMENT)
 
 
 def test_sidecar_recipe_has_a_stable_cache_digest():
