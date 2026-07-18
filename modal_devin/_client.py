@@ -55,6 +55,7 @@ class Claim:
     deadline: str | None
     connect_token: str | None
     gateway_url: str | None
+    remote_binary_sha: str | None = None
 
 
 class SessionStatus(StrEnum):
@@ -69,6 +70,14 @@ class SessionStatus(StrEnum):
     EXIT = "exit"
     ERROR = "error"
     TERMINATED = "terminated"
+
+
+@dataclass(frozen=True, slots=True)
+class PendingSession:
+    """One queue entry in the pending phase."""
+
+    session_id: str
+    session_status: SessionStatus | None
 
 
 def _json_object(body: bytes, *, url: str) -> JsonObject:
@@ -188,8 +197,8 @@ class OutpostsClient:
         encoded = urllib.parse.quote(outpost_id, safe="")
         self._request("DELETE", f"/opbeta/outposts/{encoded}")
 
-    def pending_session_ids(self, outpost_id: str) -> tuple[str, ...]:
-        session_ids: dict[str, None] = {}
+    def pending_sessions(self, outpost_id: str) -> tuple[PendingSession, ...]:
+        sessions: dict[str, PendingSession] = {}
         cursor: str | None = None
         seen_cursors: set[str] = set()
         page = 0
@@ -202,19 +211,22 @@ class OutpostsClient:
             query = urllib.parse.urlencode(parameters)
             response = self._request("GET", f"/opbeta/outposts/devins?{query}")
             for index, item in enumerate(_items(response)):
-                session_ids[
-                    _required_nested_string(
-                        item,
-                        "metadata",
-                        "session_id",
-                        context=f"pending page {page} item {index}",
-                    )
-                ] = None
+                session_id = _required_nested_string(
+                    item,
+                    "metadata",
+                    "session_id",
+                    context=f"pending page {page} item {index}",
+                )
+                status_value = _nested_string(item, "status", "session_status")
+                sessions[session_id] = PendingSession(
+                    session_id=session_id,
+                    session_status=None if status_value is None else _session_status(status_value),
+                )
             has_next_page = response.get("has_next_page", False)
             if not isinstance(has_next_page, bool):
                 raise OutpostsProtocolError("Outposts response has a non-boolean has_next_page")
             if not has_next_page:
-                return tuple(session_ids)
+                return tuple(sessions.values())
             next_cursor = response.get("cursor")
             if not isinstance(next_cursor, str) or not next_cursor:
                 raise OutpostsProtocolError(
@@ -241,6 +253,7 @@ class OutpostsClient:
             deadline=_nested_string(response, "status", "claim_deadline"),
             connect_token=_nested_string(response, "status", "connect_token"),
             gateway_url=_nested_string(response, "status", "gateway_url"),
+            remote_binary_sha=_nested_string(response, "spec", "remote_binary_sha"),
         )
 
     def release(self, session_id: str, acceptor_id: str) -> None:
@@ -264,3 +277,13 @@ class OutpostsClient:
             context=f"session {session_id!r}",
         )
         return _session_status(value)
+
+    def remote_binary_sha(self, session_id: str) -> str | None:
+        """Return the devin-remote git SHA the session's queue entry pins, if any."""
+        try:
+            response = self._request("GET", self._session_resource_path(session_id))
+        except _HTTPError as error:
+            if error.status_code == 404:
+                return None
+            raise OutpostsAPIError(f"spec request for {session_id!r} failed: {error}") from error
+        return _nested_string(response, "spec", "remote_binary_sha")

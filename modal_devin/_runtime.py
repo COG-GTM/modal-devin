@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable, Mapping
@@ -14,6 +15,7 @@ from typing import Any, Protocol
 import modal
 from modal.stream_type import StreamType
 
+from modal_devin import _observability as observability
 from modal_devin._client import ClaimConflict, OutpostsClient, SessionStatus
 from modal_devin._config import (
     WorkerConfig,
@@ -46,8 +48,17 @@ _TERMINAL_STATUSES = {
     SessionStatus.ERROR,
     SessionStatus.TERMINATED,
 }
+# A released suspended session reappears as phase=pending until the queue prunes it,
+# but it is asleep, not awaiting a worker; claiming it produces an idle sandbox.
+_UNSERVABLE_STATUSES = _TERMINAL_STATUSES | {SessionStatus.SUSPENDED}
+# Consecutive suspended liveness readings tolerated before concluding the remote
+# missed the session-end notification (the status can briefly read suspended while
+# a healthy remote is still flushing its own clean exit).
+_SUSPENDED_LIVENESS_STRIKES = 3
 _SNAPSHOT_KEY_PREFIX = "__modal_devin_snapshot__:"
 _DISPATCH_KEY_PREFIX = "__modal_devin_dispatch__:"
+_DISPATCH_EXPIRY_KEY = "expires_at"
+_DISPATCH_TRACE_CONTEXT_KEY = "trace_context"
 _SNAPSHOT_INDEX_REFRESH_KEY = "__modal_devin_snapshot_index_refreshed_at__"
 _SNAPSHOT_INDEX_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60
 
@@ -103,20 +114,51 @@ def _reserve_dispatch(
     snapshot_store: SnapshotStore,
     session_id: str,
     settings: WorkerSettings,
+    trace_context: Mapping[str, str],
 ) -> bool:
     """Acquire a bounded queueing lease for one session dispatch."""
     key = _dispatch_key(session_id)
     now = time.time()
-    current_expiry = snapshot_store.get(key)
+    current_expiry = _dispatch_expiry(snapshot_store.get(key))
     if isinstance(current_expiry, (int, float)) and current_expiry > now:
         return False
     if current_expiry is not None:
         snapshot_store.pop(key, None)
     return snapshot_store.put(
         key,
-        now + _dispatch_lease_seconds(settings),
+        {
+            _DISPATCH_EXPIRY_KEY: now + _dispatch_lease_seconds(settings),
+            _DISPATCH_TRACE_CONTEXT_KEY: dict(trace_context),
+        },
         skip_if_exists=True,
     )
+
+
+def _dispatch_expiry(lease: object) -> float | None:
+    """Read both legacy numeric leases and trace-aware lease records."""
+    if isinstance(lease, (int, float)):
+        return float(lease)
+    if isinstance(lease, dict):
+        expiry = lease.get(_DISPATCH_EXPIRY_KEY)
+        if isinstance(expiry, (int, float)):
+            return float(expiry)
+    return None
+
+
+def _dispatch_trace_context(lease: object) -> dict[str, str] | None:
+    """Return a validated serialized OTEL context from a dispatch lease."""
+    if not isinstance(lease, dict):
+        return None
+    carrier = lease.get(_DISPATCH_TRACE_CONTEXT_KEY)
+    if not isinstance(carrier, dict):
+        return None
+    if not all(isinstance(key, str) and isinstance(value, str) for key, value in carrier.items()):
+        return None
+    return {
+        key: value
+        for key, value in carrier.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
 
 
 def _new_acceptor_id(config: WorkerConfig) -> str:
@@ -320,6 +362,51 @@ def _snapshot(
     logger.info("[%s] stored filesystem snapshot %s", session_id, image_id)
 
 
+def _watch_session_liveness(
+    client: OutpostsClient,
+    sandbox: modal.Sandbox,
+    *,
+    session_id: str,
+    interval_seconds: float,
+    stop: threading.Event,
+    ended: threading.Event,
+) -> None:
+    """Kill the sandbox once the session ends without the remote noticing.
+
+    The Outposts contract expects orchestrators to poll ``status.session_status``
+    while the remote runs and terminate it themselves once the session reaches a
+    terminal state or its queue entry disappears; otherwise a remote that missed
+    the session-end notification idles until the function timeout.
+    """
+    suspended_strikes = 0
+    while not stop.wait(interval_seconds):
+        try:
+            status = client.session_status(session_id)
+        except (OutpostsAPIError, OutpostsProtocolError) as error:
+            logger.warning("[%s] session liveness lookup failed: %s", session_id, error)
+            continue
+        if status == SessionStatus.SUSPENDED:
+            suspended_strikes += 1
+            if suspended_strikes < _SUSPENDED_LIVENESS_STRIKES:
+                continue
+        elif status is not None and status not in _TERMINAL_STATUSES:
+            suspended_strikes = 0
+            continue
+        logger.warning(
+            "[%s] session is %s while the worker is still running; terminating the sandbox",
+            session_id,
+            "gone from the queue" if status is None else status,
+        )
+        ended.set()
+        try:
+            sandbox.terminate()
+        except Exception:
+            logger.exception(
+                "[%s] sandbox termination after external session end failed", session_id
+            )
+        return
+
+
 def _run_claimed_session(
     *,
     app: modal.App,
@@ -333,6 +420,7 @@ def _run_claimed_session(
     claim_deadline: str | None,
     connect_token: str | None,
     gateway_url: str | None,
+    remote_binary_sha: str | None = None,
     sidecar_image_id: str,
     sandbox_options: Mapping[str, Any],
 ) -> None:
@@ -340,43 +428,49 @@ def _run_claimed_session(
     primary_error: BaseException | None = None
     deadline_epoch = _claim_deadline_epoch(claim_deadline)
     try:
-        sandbox_ready_timeout = _deadline_limited_timeout(
-            settings.sandbox_ready_timeout_seconds,
-            deadline_epoch=deadline_epoch,
-            reserve_seconds=(
-                settings.sidecar_ready_timeout_seconds + settings.claim_connect_margin_seconds
-            ),
-        )
-        sandbox = _create_sandbox(
-            app=app,
-            base_image=image,
+        with observability.span(
+            "modal-devin sandbox start",
+            config=config,
             session_id=session_id,
-            snapshot_store=snapshot_store,
-            settings=settings,
-            readiness_timeout_seconds=sandbox_ready_timeout,
-            sandbox_options=sandbox_options,
-        )
-        try:
-            _create_sidecar(
-                sandbox,
-                sidecar_image_id=sidecar_image_id,
-                api_url=config.api_url,
-                token=client.token,
+            attributes={"modal_devin.acceptor.id": acceptor_id},
+        ):
+            sandbox_ready_timeout = _deadline_limited_timeout(
+                settings.sandbox_ready_timeout_seconds,
+                deadline_epoch=deadline_epoch,
+                reserve_seconds=(
+                    settings.sidecar_ready_timeout_seconds + settings.claim_connect_margin_seconds
+                ),
             )
-        except modal.exception.NotFoundError:
-            snapshot_store.pop(_SIDECAR_IMAGE_KEY, None)
-            raise
-        sidecar_ready_timeout = _deadline_limited_timeout(
-            settings.sidecar_ready_timeout_seconds,
-            deadline_epoch=deadline_epoch,
-            reserve_seconds=settings.claim_connect_margin_seconds,
-        )
-        _wait_for_sidecar(sandbox, timeout_seconds=sidecar_ready_timeout)
-        _deadline_limited_timeout(
-            1,
-            deadline_epoch=deadline_epoch,
-            reserve_seconds=settings.claim_connect_margin_seconds,
-        )
+            sandbox = _create_sandbox(
+                app=app,
+                base_image=image,
+                session_id=session_id,
+                snapshot_store=snapshot_store,
+                settings=settings,
+                readiness_timeout_seconds=sandbox_ready_timeout,
+                sandbox_options=sandbox_options,
+            )
+            try:
+                _create_sidecar(
+                    sandbox,
+                    sidecar_image_id=sidecar_image_id,
+                    api_url=config.api_url,
+                    token=client.token,
+                )
+            except modal.exception.NotFoundError:
+                snapshot_store.pop(_SIDECAR_IMAGE_KEY, None)
+                raise
+            sidecar_ready_timeout = _deadline_limited_timeout(
+                settings.sidecar_ready_timeout_seconds,
+                deadline_epoch=deadline_epoch,
+                reserve_seconds=settings.claim_connect_margin_seconds,
+            )
+            _wait_for_sidecar(sandbox, timeout_seconds=sidecar_ready_timeout)
+            _deadline_limited_timeout(
+                1,
+                deadline_epoch=deadline_epoch,
+                reserve_seconds=settings.claim_connect_margin_seconds,
+            )
 
         exec_env: dict[str, str | None] = {
             "DEVIN_API_URL": f"http://caddy:{_SIDECAR_PORT}",
@@ -386,31 +480,77 @@ def _run_claimed_session(
             exec_env["DEVIN_REMOTE_SESSION_TOKEN"] = connect_token
             if gateway_url is not None:
                 exec_env["DEVIN_OUTPOST_GATEWAY_URL"] = gateway_url
+        if remote_binary_sha is not None:
+            # With DEVIN_REMOTE_SESSION_TOKEN set, the CLI serves the session without
+            # reading its queue entry, so it never sees spec.remote_binary_sha and
+            # would boot the latest published remote instead of the session's pin.
+            exec_env["DEVIN_WORKER_REMOTE_SHA"] = remote_binary_sha
 
-        process = sandbox.exec(
-            _DEVIN_BIN,
-            "worker",
-            "start",
-            "--session",
-            session_id,
-            "--pool",
-            config.outpost_id,
-            "--acceptor-id",
-            acceptor_id,
-            env=exec_env,
-            stderr=StreamType.STDOUT,
-            timeout=settings.session_timeout_seconds,
-        )
-        for line in process.stdout:
-            logger.info("[%s] %s", session_id, line.rstrip())
-        returncode = process.wait()
-        logger.info("[%s] Devin worker exited with status %s", session_id, returncode)
-
-        known, status = _final_status(
-            client,
+        with observability.span(
+            "modal-devin worker process",
+            config=config,
             session_id=session_id,
-            settings=settings,
-        )
+            attributes={"modal_devin.acceptor.id": acceptor_id},
+        ):
+            process = sandbox.exec(
+                _DEVIN_BIN,
+                "worker",
+                "start",
+                "--session",
+                session_id,
+                "--pool",
+                config.outpost_id,
+                "--acceptor-id",
+                acceptor_id,
+                env=exec_env,
+                stderr=StreamType.STDOUT,
+                timeout=settings.session_timeout_seconds,
+            )
+            watchdog_stop = threading.Event()
+            session_ended_externally = threading.Event()
+            watchdog = threading.Thread(
+                target=_watch_session_liveness,
+                args=(client, sandbox),
+                kwargs={
+                    "session_id": session_id,
+                    "interval_seconds": settings.status_watchdog_interval_seconds,
+                    "stop": watchdog_stop,
+                    "ended": session_ended_externally,
+                },
+                name=f"session-liveness-{session_id}",
+                daemon=True,
+            )
+            watchdog.start()
+            try:
+                for line in process.stdout:
+                    logger.info("[%s] %s", session_id, line.rstrip())
+                returncode = process.wait()
+            except Exception:
+                if not session_ended_externally.is_set():
+                    raise
+                returncode = None
+            finally:
+                watchdog_stop.set()
+            logger.info("[%s] Devin worker exited with status %s", session_id, returncode)
+
+        if session_ended_externally.is_set():
+            logger.info(
+                "[%s] session already ended on the Devin side; skipping finalization",
+                session_id,
+            )
+            return
+
+        with observability.span(
+            "modal-devin session finalize",
+            config=config,
+            session_id=session_id,
+            attributes={"process.exit_code": returncode},
+        ):
+            known, status = _final_status(
+                client,
+                session_id=session_id,
+                settings=settings,
+            )
         safe_terminal = status is None or status in _TERMINAL_STATUSES
         if not known or (status != SessionStatus.SUSPENDED and not safe_terminal):
             logger.warning(
@@ -465,11 +605,46 @@ def execute_session(
 ) -> None:
     """Run one dispatched session with isolated claim ownership."""
     _configure_logging(settings)
+    observability.configure_observability(config)
     snapshot_store = modal.Dict.from_name(
         config.snapshot_store_name,
         create_if_missing=True,
     )
-    snapshot_store.pop(_dispatch_key(session_id), None)
+    dispatch_lease = snapshot_store.pop(_dispatch_key(session_id), None)
+    trace_context = _dispatch_trace_context(dispatch_lease)
+    with (
+        observability.attach_context(trace_context),
+        observability.span(
+            "modal-devin session lifecycle",
+            config=config,
+            session_id=session_id,
+            attributes={"modal.function.name": "session"},
+        ),
+    ):
+        _execute_session(
+            app=app,
+            image=image,
+            config=config,
+            settings=settings,
+            session_id=session_id,
+            token=token,
+            sandbox_options=sandbox_options,
+            snapshot_store=snapshot_store,
+        )
+
+
+def _execute_session(
+    *,
+    app: modal.App,
+    image: modal.Image,
+    config: WorkerConfig,
+    settings: WorkerSettings,
+    session_id: str,
+    token: str,
+    sandbox_options: Mapping[str, Any],
+    snapshot_store: SnapshotStore,
+) -> None:
+    """Execute a session inside its attached scheduler trace context."""
     client = OutpostsClient(
         config.api_url,
         token,
@@ -480,7 +655,13 @@ def execute_session(
     lifecycle_error: BaseException | None = None
     try:
         try:
-            claim = client.claim(session_id, acceptor_id)
+            with observability.span(
+                "modal-devin session claim",
+                config=config,
+                session_id=session_id,
+                attributes={"modal_devin.acceptor.id": acceptor_id},
+            ):
+                claim = client.claim(session_id, acceptor_id)
         except ClaimConflict:
             logger.info("[%s] claim was acquired by another invocation", session_id)
             return
@@ -494,6 +675,17 @@ def execute_session(
         sidecar_image_id = snapshot_store.get(_SIDECAR_IMAGE_KEY)
         if not isinstance(sidecar_image_id, str):
             raise ModalCompatibilityError("worker sidecar image has not been prepared")
+        remote_binary_sha = claim.remote_binary_sha
+        if remote_binary_sha is None:
+            try:
+                remote_binary_sha = client.remote_binary_sha(session_id)
+            except OutpostsAPIError as error:
+                logger.warning(
+                    "[%s] could not read the pinned remote binary SHA; "
+                    "the worker will boot the latest published remote: %s",
+                    session_id,
+                    error,
+                )
         _run_claimed_session(
             app=app,
             image=image,
@@ -506,6 +698,7 @@ def execute_session(
             claim_deadline=claim.deadline,
             connect_token=claim.connect_token,
             gateway_url=claim.gateway_url,
+            remote_binary_sha=remote_binary_sha,
             sidecar_image_id=sidecar_image_id,
             sandbox_options=sandbox_options,
         )
@@ -515,12 +708,18 @@ def execute_session(
         raise
     finally:
         if claimed:
-            _release_safely(
-                client,
-                session_id,
-                acceptor_id,
-                "worker failure" if lifecycle_error is not None else "confirmed session end",
-            )
+            with observability.span(
+                "modal-devin session release",
+                config=config,
+                session_id=session_id,
+                attributes={"modal_devin.acceptor.id": acceptor_id},
+            ):
+                _release_safely(
+                    client,
+                    session_id,
+                    acceptor_id,
+                    "worker failure" if lifecycle_error is not None else "confirmed session end",
+                )
 
 
 def dispatch_pending_sessions(
@@ -532,6 +731,28 @@ def dispatch_pending_sessions(
 ) -> None:
     """Discover pending sessions and dispatch one Modal function call per session."""
     _configure_logging(settings)
+    observability.configure_observability(config)
+    with observability.span(
+        "modal-devin scheduler poll",
+        config=config,
+        attributes={"modal.function.name": "scheduler"},
+    ):
+        _dispatch_pending_sessions(
+            config=config,
+            settings=settings,
+            spawn_session=spawn_session,
+            token=token,
+        )
+
+
+def _dispatch_pending_sessions(
+    *,
+    config: WorkerConfig,
+    settings: WorkerSettings,
+    spawn_session: Callable[[str], object],
+    token: str,
+) -> None:
+    """Perform one scheduler poll inside its root tracing span."""
     snapshot_store = modal.Dict.from_name(
         config.snapshot_store_name,
         create_if_missing=True,
@@ -543,7 +764,8 @@ def dispatch_pending_sessions(
         timeout=settings.api_timeout_seconds,
     )
     try:
-        pending = client.pending_session_ids(config.outpost_id)
+        with observability.span("modal-devin list pending sessions", config=config):
+            pending = client.pending_sessions(config.outpost_id)
     except OutpostsProtocolError:
         logger.exception("Outposts scheduler received an invalid response")
         raise
@@ -556,24 +778,39 @@ def dispatch_pending_sessions(
     sidecar_image_id = snapshot_store.get(_SIDECAR_IMAGE_KEY)
     if not isinstance(sidecar_image_id, str):
         try:
-            sidecar_image_id = _build_sidecar_image_id(config.image_build_app_name)
-            snapshot_store.put(_SIDECAR_IMAGE_KEY, sidecar_image_id)
+            with observability.span("modal-devin sidecar image build", config=config):
+                sidecar_image_id = _build_sidecar_image_id(config.image_build_app_name)
+                snapshot_store.put(_SIDECAR_IMAGE_KEY, sidecar_image_id)
         except Exception:
             logger.exception("sidecar image build failed before dispatching sessions")
             raise
 
     dispatch_failures: list[Exception] = []
-    for session_id in pending:
-        if not _reserve_dispatch(snapshot_store, session_id, settings):
-            logger.info("[%s] an invocation is already queued", session_id)
+    for session in pending:
+        session_id = session.session_id
+        if session.session_status in _UNSERVABLE_STATUSES:
+            logger.info(
+                "[%s] skipping dispatch; session is %s and not awaiting a worker",
+                session_id,
+                session.session_status,
+            )
             continue
-        try:
-            spawn_session(session_id)
-        except Exception as error:
-            snapshot_store.pop(_dispatch_key(session_id), None)
-            logger.exception("[%s] dispatch failed", session_id)
-            error.add_note(f"while dispatching session {session_id!r}")
-            dispatch_failures.append(error)
+        with observability.span(
+            "modal-devin session dispatch",
+            config=config,
+            session_id=session_id,
+        ):
+            trace_context = observability.get_context()
+            if not _reserve_dispatch(snapshot_store, session_id, settings, trace_context):
+                logger.info("[%s] an invocation is already queued", session_id)
+                continue
+            try:
+                spawn_session(session_id)
+            except Exception as error:
+                snapshot_store.pop(_dispatch_key(session_id), None)
+                logger.exception("[%s] dispatch failed", session_id)
+                error.add_note(f"while dispatching session {session_id!r}")
+                dispatch_failures.append(error)
 
     if dispatch_failures:
         raise ExceptionGroup("one or more session dispatches failed", dispatch_failures)

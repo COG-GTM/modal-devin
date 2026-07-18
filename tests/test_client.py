@@ -7,7 +7,7 @@ from email.message import Message
 import pytest
 
 from modal_devin import OutpostsAPIError, OutpostsProtocolError
-from modal_devin._client import ClaimConflict, OutpostsClient, SessionStatus
+from modal_devin._client import ClaimConflict, OutpostsClient, PendingSession, SessionStatus
 
 
 class Response:
@@ -49,11 +49,22 @@ def make_client(recorder):
 
 
 def test_pending_sessions_are_typed_and_requests_have_standard_headers():
-    recorder = RecordingUrlOpen([{"items": [{"metadata": {"session_id": "devin-1"}}]}])
+    recorder = RecordingUrlOpen(
+        [
+            {
+                "items": [
+                    {
+                        "metadata": {"session_id": "devin-1"},
+                        "status": {"session_status": "running"},
+                    }
+                ]
+            }
+        ]
+    )
 
-    result = make_client(recorder).pending_session_ids("outpost with spaces")
+    result = make_client(recorder).pending_sessions("outpost with spaces")
 
-    assert result == ("devin-1",)
+    assert result == (PendingSession("devin-1", SessionStatus.RUNNING),)
     [request] = recorder.requests
     assert request.full_url.endswith("outpost=outpost+with+spaces&phase=pending&first=200")
     assert request.get_header("Authorization") == "Bearer token-123"
@@ -84,10 +95,10 @@ def test_claim_conflict_has_a_domain_exception():
 def test_http_and_transport_failures_have_domain_exceptions():
     server_error = urllib.error.HTTPError("url", 500, "Nope", Message(), None)
     with pytest.raises(OutpostsAPIError):
-        make_client(RecordingUrlOpen([server_error])).pending_session_ids("outpost")
+        make_client(RecordingUrlOpen([server_error])).pending_sessions("outpost")
 
     with pytest.raises(OutpostsAPIError):
-        make_client(RecordingUrlOpen([urllib.error.URLError("offline")])).pending_session_ids(
+        make_client(RecordingUrlOpen([urllib.error.URLError("offline")])).pending_sessions(
             "outpost"
         )
 
@@ -105,7 +116,7 @@ def test_malformed_responses_raise_protocol_errors(body):
     recorder = RecordingUrlOpen([body])
 
     with pytest.raises(OutpostsProtocolError):
-        make_client(recorder).pending_session_ids("outpost")
+        make_client(recorder).pending_sessions("outpost")
 
 
 def test_status_distinguishes_successful_absence_from_request_failure():
@@ -151,8 +162,45 @@ def test_pending_sessions_paginate_and_deduplicate_page_boundaries():
         ]
     )
 
-    assert make_client(recorder).pending_session_ids("outpost") == ("devin-1", "devin-2")
+    assert make_client(recorder).pending_sessions("outpost") == (
+        PendingSession("devin-1", None),
+        PendingSession("devin-2", None),
+    )
     assert "cursor=next" in recorder.requests[1].full_url
+
+
+def test_pending_sessions_parse_session_status_into_the_closed_protocol_type():
+    recorder = RecordingUrlOpen(
+        [
+            {
+                "items": [
+                    {
+                        "metadata": {"session_id": "devin-1"},
+                        "status": {"session_status": "suspended"},
+                    }
+                ]
+            }
+        ]
+    )
+
+    assert make_client(recorder).pending_sessions("outpost") == (
+        PendingSession("devin-1", SessionStatus.SUSPENDED),
+    )
+
+    unknown = RecordingUrlOpen(
+        [
+            {
+                "items": [
+                    {
+                        "metadata": {"session_id": "devin-1"},
+                        "status": {"session_status": "future-state"},
+                    }
+                ]
+            }
+        ]
+    )
+    with pytest.raises(OutpostsProtocolError, match="unknown Outposts session status"):
+        make_client(unknown).pending_sessions("outpost")
 
 
 def test_pending_sessions_reject_non_adjacent_cursor_cycles():
@@ -165,7 +213,7 @@ def test_pending_sessions_reject_non_adjacent_cursor_cycles():
     )
 
     with pytest.raises(OutpostsProtocolError, match="repeated cursor 'A'"):
-        make_client(recorder).pending_session_ids("outpost")
+        make_client(recorder).pending_sessions("outpost")
 
     assert len(recorder.requests) == 3
 
@@ -182,7 +230,7 @@ def test_response_size_is_bounded():
     )
 
     with pytest.raises(OutpostsProtocolError, match="exceeded 1 MiB"):
-        client.pending_session_ids("outpost")
+        client.pending_sessions("outpost")
 
 
 def test_create_outpost_posts_to_opbeta_outposts_and_returns_the_id():

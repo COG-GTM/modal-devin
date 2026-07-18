@@ -7,12 +7,29 @@ and uses semantic versioning.
 
 ### Added
 
+- Running workers now poll their session's queue status and shut down once the
+  session terminates or leaves the queue, instead of idling until the function
+  timeout. The interval is configurable via `status_watchdog_interval_seconds`
+  (`MODAL_DEVIN_STATUS_WATCHDOG_INTERVAL_SECONDS`, default 60 seconds).
 - The scheduler and session runtimes emit OpenTelemetry traces through Pydantic
   Logfire. Every scheduler poll starts a trace that each dispatched session
   continues across the Modal function boundary through claim acquisition, Sandbox
   and sidecar startup, the Devin worker process, finalization, and claim release.
   Add `LOGFIRE_TOKEN` to the shared Modal Secret to send traces to Logfire, or set
   `OTEL_EXPORTER_OTLP_ENDPOINT` for any other OpenTelemetry-compatible backend.
+
+### Fixed
+
+- The scheduler no longer dispatches workers for queue entries whose session is
+  suspended or already finished. Releasing a just-suspended session returns its
+  entry to the pending phase until Devin prunes it, and dispatching on the phase
+  alone claimed the sleeping session and produced an idle sandbox.
+- Workers now boot the devin-remote binary the session pins
+  (`spec.remote_binary_sha`) by passing `DEVIN_WORKER_REMOTE_SHA` to the Devin
+  CLI. Because the worker serves the session directly (no queue API), the CLI
+  never read the pin and booted the latest published remote instead; when
+  Cognition ships a new remote, sessions pinned to it never attach and stall at
+  "Your outpost machine hasn't connected".
 
 ## 0.1.8 - 2026-07-17
 

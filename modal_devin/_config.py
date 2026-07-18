@@ -19,6 +19,7 @@ DEFAULT_API_TIMEOUT_SECONDS = 30.0
 DEFAULT_SNAPSHOT_TTL_SECONDS = 30 * 24 * 60 * 60
 DEFAULT_STATUS_ATTEMPTS = 3
 DEFAULT_STATUS_RETRY_DELAY_SECONDS = 1.0
+DEFAULT_STATUS_WATCHDOG_INTERVAL_SECONDS = 60.0
 DEFAULT_SANDBOX_READY_TIMEOUT_SECONDS = 120
 DEFAULT_SIDECAR_READY_TIMEOUT_SECONDS = 60
 DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 120
@@ -68,6 +69,7 @@ class WorkerSettings:
     snapshot_ttl_seconds: int | None = DEFAULT_SNAPSHOT_TTL_SECONDS
     status_attempts: int = DEFAULT_STATUS_ATTEMPTS
     status_retry_delay_seconds: float = DEFAULT_STATUS_RETRY_DELAY_SECONDS
+    status_watchdog_interval_seconds: float = DEFAULT_STATUS_WATCHDOG_INTERVAL_SECONDS
     sandbox_ready_timeout_seconds: int = DEFAULT_SANDBOX_READY_TIMEOUT_SECONDS
     sidecar_ready_timeout_seconds: int = DEFAULT_SIDECAR_READY_TIMEOUT_SECONDS
     snapshot_timeout_seconds: int = DEFAULT_SNAPSHOT_TIMEOUT_SECONDS
@@ -80,6 +82,7 @@ class WorkerSettings:
             "session_timeout_seconds",
             "api_timeout_seconds",
             "status_attempts",
+            "status_watchdog_interval_seconds",
             "sandbox_ready_timeout_seconds",
             "sidecar_ready_timeout_seconds",
             "snapshot_timeout_seconds",
@@ -114,7 +117,11 @@ class WorkerSettings:
             "snapshot_timeout_seconds",
             "claim_connect_margin_seconds",
         }
-        float_fields = {"api_timeout_seconds", "status_retry_delay_seconds"}
+        float_fields = {
+            "api_timeout_seconds",
+            "status_retry_delay_seconds",
+            "status_watchdog_interval_seconds",
+        }
         for field in fields(cls):
             raw = os.environ.get(_ENV_PREFIX + field.name.upper())
             if raw is None:

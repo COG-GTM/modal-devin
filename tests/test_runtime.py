@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock
@@ -19,7 +21,7 @@ from modal_devin import (
 from modal_devin import (
     _runtime as runtime,
 )
-from modal_devin._client import Claim, ClaimConflict, OutpostsClient
+from modal_devin._client import Claim, ClaimConflict, OutpostsClient, PendingSession, SessionStatus
 from modal_devin._config import WorkerConfig, WorkerSettings
 
 
@@ -76,11 +78,22 @@ class Sandbox:
 class Client:
     token = "real-token"
 
-    def __init__(self, *, status=None, statuses=(), status_errors=(), claim_error=None):
+    def __init__(
+        self,
+        *,
+        status=None,
+        statuses=(),
+        status_errors=(),
+        claim_error=None,
+        claim_remote_sha=None,
+        entry_remote_sha=None,
+    ):
         self.status = status
         self.statuses = list(statuses)
         self.status_errors = list(status_errors)
         self.claim_error = claim_error
+        self.claim_remote_sha = claim_remote_sha
+        self.entry_remote_sha = entry_remote_sha
         self.claims = []
         self.releases = []
 
@@ -88,7 +101,10 @@ class Client:
         self.claims.append((session_id, acceptor_id))
         if self.claim_error:
             raise self.claim_error
-        return Claim(None, "connect-token", "wss://gateway.example")
+        return Claim(None, "connect-token", "wss://gateway.example", self.claim_remote_sha)
+
+    def remote_binary_sha(self, session_id):
+        return self.entry_remote_sha
 
     def session_status(self, session_id):
         if self.status_errors:
@@ -115,7 +131,7 @@ def settings():
     )
 
 
-def run_claimed(monkeypatch, *, config, settings, client, store, sandbox):
+def run_claimed(monkeypatch, *, config, settings, client, store, sandbox, remote_binary_sha=None):
     monkeypatch.setattr(runtime, "_create_sandbox", Mock(return_value=sandbox))
     monkeypatch.setattr(runtime, "_create_sidecar", Mock())
     monkeypatch.setattr(runtime, "_wait_for_sidecar", Mock())
@@ -131,6 +147,7 @@ def run_claimed(monkeypatch, *, config, settings, client, store, sandbox):
         claim_deadline=None,
         connect_token="connect-token",
         gateway_url="wss://gateway.example",
+        remote_binary_sha=remote_binary_sha,
         sidecar_image_id="im-sidecar",
         sandbox_options={},
     )
@@ -321,6 +338,8 @@ def test_run_session_releases_claim_after_success(monkeypatch, config, settings)
     monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
     monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
     monkeypatch.setattr(runtime, "_run_claimed_session", Mock())
+    attach_context = Mock(wraps=runtime.observability.attach_context)
+    monkeypatch.setattr(runtime.observability, "attach_context", attach_context)
 
     runtime.execute_session(
         app=Mock(),
@@ -336,6 +355,7 @@ def test_run_session_releases_claim_after_success(monkeypatch, config, settings)
     assert claimed_session == "devin-1"
     assert client.releases == [("devin-1", acceptor_id)]
     assert runtime._dispatch_key("devin-1") not in store.values
+    attach_context.assert_called_once_with(None)
 
 
 def test_run_session_claim_conflict_is_a_successful_duplicate(monkeypatch, config, settings):
@@ -628,10 +648,13 @@ class PollClient:
         self.claimed = []
         self.released = []
 
-    def pending_session_ids(self, outpost_id):
+    def pending_sessions(self, outpost_id):
         if isinstance(self.pending, BaseException):
             raise self.pending
-        return self.pending
+        return tuple(
+            entry if isinstance(entry, PendingSession) else PendingSession(entry, None)
+            for entry in self.pending
+        )
 
     def claim(self, session_id, acceptor_id):
         if self.claim_error:
@@ -650,6 +673,8 @@ def test_scheduler_caches_sidecar_and_dispatches_claim(monkeypatch, config, sett
     monkeypatch.setattr(runtime, "_build_sidecar_image_id", build)
     store = Store()
     monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
+    trace_context = {"traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"}
+    monkeypatch.setattr(runtime.observability, "get_context", Mock(return_value=trace_context))
     spawn = Mock()
 
     runtime.dispatch_pending_sessions(
@@ -660,8 +685,40 @@ def test_scheduler_caches_sidecar_and_dispatches_claim(monkeypatch, config, sett
     )
 
     assert store.values[runtime._SIDECAR_IMAGE_KEY] == "im-sidecar"
+    lease = store.values[runtime._dispatch_key("devin-1")]
+    assert lease[runtime._DISPATCH_TRACE_CONTEXT_KEY] == trace_context
     build.assert_called_once_with(config.image_build_app_name)
     spawn.assert_called_once_with("devin-1")
+
+
+def test_session_attaches_scheduler_trace_context(monkeypatch, config, settings):
+    trace_context = {"traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"}
+    store = Store(
+        {
+            runtime._SIDECAR_IMAGE_KEY: "im-sidecar",
+            runtime._dispatch_key("devin-1"): {
+                runtime._DISPATCH_EXPIRY_KEY: 9_999_999.0,
+                runtime._DISPATCH_TRACE_CONTEXT_KEY: trace_context,
+            },
+        }
+    )
+    client = Client(claim_error=ClaimConflict("devin-1"))
+    monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
+    monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
+    attach_context = Mock(wraps=runtime.observability.attach_context)
+    monkeypatch.setattr(runtime.observability, "attach_context", attach_context)
+
+    runtime.execute_session(
+        app=Mock(),
+        image=Mock(),
+        config=config,
+        settings=settings,
+        session_id="devin-1",
+        token="token",
+        sandbox_options={},
+    )
+
+    attach_context.assert_called_once_with(trace_context)
 
 
 def test_scheduler_does_not_release_an_unclaimed_session_when_spawn_fails(
@@ -794,7 +851,8 @@ def test_scheduler_deduplicates_queued_session_invocations(monkeypatch, config, 
         )
 
     spawn.assert_called_once_with("devin-1")
-    assert store.values[runtime._dispatch_key("devin-1")] > 1_000.0
+    lease = store.values[runtime._dispatch_key("devin-1")]
+    assert lease[runtime._DISPATCH_EXPIRY_KEY] > 1_000.0
 
 
 def test_scheduler_retries_an_expired_dispatch_lease(monkeypatch, config, settings):
@@ -814,7 +872,7 @@ def test_scheduler_retries_an_expired_dispatch_lease(monkeypatch, config, settin
     )
 
     spawn.assert_called_once_with("devin-1")
-    assert store.values[lease_key] > 1_000.0
+    assert store.values[lease_key][runtime._DISPATCH_EXPIRY_KEY] > 1_000.0
 
 
 def test_scheduler_refreshes_snapshot_index_once_per_day(monkeypatch):
@@ -830,3 +888,205 @@ def test_scheduler_refreshes_snapshot_index_once_per_day(monkeypatch):
 
     assert sum(call.args == (snapshot_key,) for call in get.call_args_list) == 1
     assert store.values[runtime._SNAPSHOT_INDEX_REFRESH_KEY] == now
+
+
+def test_scheduler_skips_pending_entries_that_are_not_awaiting_a_worker(
+    monkeypatch, config, settings
+):
+    client = PollClient(
+        pending=(
+            PendingSession("devin-asleep", SessionStatus.SUSPENDED),
+            PendingSession("devin-done", SessionStatus.TERMINATED),
+            PendingSession("devin-live", SessionStatus.RUNNING),
+        )
+    )
+    monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
+    store = Store({runtime._SIDECAR_IMAGE_KEY: "im-sidecar"})
+    monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
+    spawn = Mock()
+
+    runtime.dispatch_pending_sessions(
+        config=config,
+        settings=settings,
+        spawn_session=spawn,
+        token="token",
+    )
+
+    spawn.assert_called_once_with("devin-live")
+    assert runtime._dispatch_key("devin-asleep") not in store.values
+    assert runtime._dispatch_key("devin-done") not in store.values
+
+
+class HangingProcess:
+    """A worker process that only ends when its sandbox is terminated."""
+
+    def __init__(self, sandbox):
+        self._sandbox = sandbox
+        self.stdout = self._lines()
+
+    def _lines(self):
+        while not self._sandbox.terminated:
+            time.sleep(0.005)
+        return
+        yield  # pragma: no cover - makes _lines a generator
+
+    def wait(self):
+        raise RuntimeError("stream reset by sandbox termination")
+
+
+class HangingSandbox(Sandbox):
+    def exec(self, *args, **kwargs):
+        self.exec_calls.append((args, kwargs))
+        return HangingProcess(self)
+
+
+def test_watchdog_stops_a_worker_whose_session_left_the_queue(monkeypatch, config):
+    settings = WorkerSettings(
+        status_attempts=3,
+        status_retry_delay_seconds=0,
+        snapshot_ttl_seconds=123,
+        status_watchdog_interval_seconds=0.01,
+    )
+    client = Client(status=None)
+    sandbox = HangingSandbox()
+    snapshot_key = runtime._snapshot_key("devin-1")
+    store = Store({snapshot_key: "im-earlier-snapshot"})
+
+    run_claimed(
+        monkeypatch,
+        config=config,
+        settings=settings,
+        client=cast(OutpostsClient, client),
+        store=store,
+        sandbox=sandbox,
+    )
+
+    assert sandbox.terminated
+    assert sandbox.snapshot_calls == []
+    assert store.values[snapshot_key] == "im-earlier-snapshot"
+
+
+def test_liveness_watchdog_tolerates_transient_suspended_readings():
+    client = Client(
+        statuses=[
+            SessionStatus.SUSPENDED,
+            SessionStatus.SUSPENDED,
+            SessionStatus.RUNNING,
+            SessionStatus.SUSPENDED,
+            SessionStatus.SUSPENDED,
+            SessionStatus.SUSPENDED,
+        ]
+    )
+    sandbox = Sandbox()
+    ended = threading.Event()
+
+    runtime._watch_session_liveness(
+        cast(OutpostsClient, client),
+        cast(modal.Sandbox, sandbox),
+        session_id="devin-1",
+        interval_seconds=0,
+        stop=threading.Event(),
+        ended=ended,
+    )
+
+    assert client.statuses == []
+    assert ended.is_set()
+    assert sandbox.terminated
+
+
+def test_liveness_watchdog_retries_transport_failures():
+    client = Client(
+        status=SessionStatus.TERMINATED,
+        status_errors=[OutpostsAPIError("offline")],
+    )
+    sandbox = Sandbox()
+    ended = threading.Event()
+
+    runtime._watch_session_liveness(
+        cast(OutpostsClient, client),
+        cast(modal.Sandbox, sandbox),
+        session_id="devin-1",
+        interval_seconds=0,
+        stop=threading.Event(),
+        ended=ended,
+    )
+
+    assert ended.is_set()
+    assert sandbox.terminated
+
+
+def test_worker_env_pins_the_sessions_remote_binary(monkeypatch, config, settings):
+    sandbox = Sandbox()
+
+    run_claimed(
+        monkeypatch,
+        config=config,
+        settings=settings,
+        client=Client(status="suspended"),
+        store=Store(),
+        sandbox=sandbox,
+        remote_binary_sha="fa58fabc31",
+    )
+
+    [(_, kwargs)] = sandbox.exec_calls
+    assert kwargs["env"]["DEVIN_WORKER_REMOTE_SHA"] == "fa58fabc31"
+
+
+def test_unpinned_session_does_not_set_a_remote_binary_sha(monkeypatch, config, settings):
+    sandbox = Sandbox()
+
+    run_claimed(
+        monkeypatch,
+        config=config,
+        settings=settings,
+        client=Client(status="suspended"),
+        store=Store(),
+        sandbox=sandbox,
+    )
+
+    [(_, kwargs)] = sandbox.exec_calls
+    assert "DEVIN_WORKER_REMOTE_SHA" not in kwargs["env"]
+
+
+def test_execute_session_reads_the_pin_from_the_queue_entry_when_the_claim_lacks_it(
+    monkeypatch, config, settings
+):
+    client = Client(status="suspended", entry_remote_sha="fa58fabc31")
+    monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
+    store = Store({runtime._SIDECAR_IMAGE_KEY: "im-sidecar"})
+    monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
+    run = Mock()
+    monkeypatch.setattr(runtime, "_run_claimed_session", run)
+
+    runtime.execute_session(
+        app=Mock(),
+        image=Mock(),
+        config=config,
+        settings=settings,
+        session_id="devin-1",
+        token="token",
+        sandbox_options={},
+    )
+
+    assert run.call_args.kwargs["remote_binary_sha"] == "fa58fabc31"
+
+
+def test_execute_session_prefers_the_claims_pin(monkeypatch, config, settings):
+    client = Client(status="suspended", claim_remote_sha="aaa111", entry_remote_sha="bbb222")
+    monkeypatch.setattr(runtime, "OutpostsClient", Mock(return_value=client))
+    store = Store({runtime._SIDECAR_IMAGE_KEY: "im-sidecar"})
+    monkeypatch.setattr(runtime.modal.Dict, "from_name", Mock(return_value=store))
+    run = Mock()
+    monkeypatch.setattr(runtime, "_run_claimed_session", run)
+
+    runtime.execute_session(
+        app=Mock(),
+        image=Mock(),
+        config=config,
+        settings=settings,
+        session_id="devin-1",
+        token="token",
+        sandbox_options={},
+    )
+
+    assert run.call_args.kwargs["remote_binary_sha"] == "aaa111"
