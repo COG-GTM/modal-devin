@@ -43,7 +43,6 @@
         "group": "How-to guides",
         "icon": "screwdriver-wrench",
         "pages": [
-          "guides/customize-image",
           "guides/resources-and-regions",
           "guides/runtime-configuration",
           "guides/multiple-outposts",
@@ -103,5 +102,12 @@
   },
   "styling": {
     "eyebrows": "breadcrumbs"
-  }
+  },
+  "redirects": [
+    {
+      "source": "/guides/customize-image",
+      "destination": "/tutorials/custom-workspace",
+      "permanent": true
+    }
+  ]
 }

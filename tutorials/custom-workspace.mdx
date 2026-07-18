@@ -54,7 +54,24 @@ You need a deployed `modal-devin` application from
     ```
   </Step>
 
-  <Step title="Deploy the workspace">
+  <Step title="Set environment variables">
+    Add non-secret configuration to the image:
+
+    ```python
+    base_image = worker.base_image().env(
+        {
+            "PYTHONUNBUFFERED": "1",
+            "PROJECT_ROOT": "/root/workspace/app",
+        }
+    )
+    image = worker.prepare_image(base_image)
+    ```
+
+    Keep credentials out of image environment variables. Attach a
+    [Modal Secret](https://modal.com/docs/guide/secrets) to the function that needs it.
+  </Step>
+
+  <Step title="Deploy the changes">
     ```bash
     uv run modal-devin deploy outposts/my_outpost.py
     ```
@@ -71,19 +88,22 @@ You need a deployed `modal-devin` application from
 
 ## Optional tools
 
-Chrome and FFmpeg are included by default. Disable either when the workload has no
-need for it:
+Choose the Python version or disable Chrome and FFmpeg when the workload does not
+need them:
 
 ```python
 base_image = worker.base_image(
+    python_version="3.12",
     install_chrome=False,
     install_ffmpeg=False,
 )
 ```
 
+| Option | Default | Effect |
+| --- | --- | --- |
+| `python_version` | `"3.12"` | Selects the Python version |
+| `install_chrome` | `True` | Enables browser and computer-use support |
+| `install_ffmpeg` | `True` | Enables screen-recording support |
+
 See the [image reference](/reference/images) for everything else the standard image
 includes.
-
-<Card title="Image customization recipes" icon="layer-group" href="/guides/customize-image" horizontal>
-  Explore packages, environment variables, repositories, and build ordering.
-</Card>
