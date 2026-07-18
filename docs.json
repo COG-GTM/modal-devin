@@ -3,6 +3,9 @@
   "theme": "mint",
   "name": "modal-devin",
   "description": "Run secure, resumable Devin Outposts workers on Modal.",
+  "appearance": {
+    "default": "dark"
+  },
   "colors": {
     "primary": "#09AF58",
     "light": "#80EE64",
