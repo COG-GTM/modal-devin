@@ -18,7 +18,7 @@ for operating or automating an existing installation, not additional setup paths
 
 | Command | Purpose |
 | --- | --- |
-| `init` | Generate a Modal outpost application, optionally creating its Devin outpost, Modal Secret, and deployment |
+| `init` | Create a Devin outpost, Modal Secret, generated Modal application, and deployment |
 | `deploy` | Deploy a generated outpost file through the current Python environment |
 | `doctor` | Check local credentials, secret presence, and runtime compatibility |
 | `--help`, `-h` | Display help |
@@ -36,12 +36,6 @@ Generates one Python application in `OUTPOSTS_DIR`. In an interactive terminal, 
 
 <ParamField path="NAME" type="string">
   Human-readable Devin Outposts outpost name. It is also available as `--name`.
-</ParamField>
-
-<ParamField path="--outpost-id" type="string">
-  Existing Devin Outposts outpost ID. When omitted, `init` creates a new outpost by
-  calling the Devin Outposts API directly (`POST /opbeta/outposts`), using the
-  `DEVIN_OUTPOSTS_TOKEN` environment variable or an interactive prompt for the token.
 </ParamField>
 
 <ParamField path="--api-url" type="string" default="https://api.beta.devinenterprise.com">
@@ -161,5 +155,5 @@ expected Modal app name, without executing the file, and looks it up with
 `modal.App.lookup`. Files whose app name cannot be determined statically (for example,
 heavily hand-edited files) print a warning instead of failing.
 
-`doctor` has no local Devin CLI prerequisite: `init` creates outposts with a direct
-Devin Outposts API call, and only the deployed worker image needs the Devin CLI at runtime.
+`doctor` has no local Devin CLI prerequisite: `init` creates the outpost directly,
+and only the deployed worker image needs the Devin CLI at runtime.

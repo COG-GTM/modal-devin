@@ -35,7 +35,6 @@
         "group": "Tutorials",
         "icon": "graduation-cap",
         "pages": [
-          "tutorials/first-worker",
           "tutorials/create-an-outpost",
           "tutorials/custom-workspace"
         ]
