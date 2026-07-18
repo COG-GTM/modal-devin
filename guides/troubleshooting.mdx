@@ -23,8 +23,9 @@ uv run modal-devin doctor
   </Accordion>
   <Accordion title="DEVIN_OUTPOSTS_TOKEN is missing">
     `init` creates a new outpost by calling the Devin Outposts API directly and
-    needs a Devin token to authorize the request. Run `uvx modal-devin init` in an
-    interactive terminal and enter the token when prompted.
+    currently needs a key from an admin-scoped Enterprise service user. Run
+    `uvx modal-devin init` in an interactive terminal and enter that key when
+    prompted.
   </Accordion>
   <Accordion title="The generated file already exists">
     Edit and redeploy the existing file, or choose another name or `--outposts-dir`.

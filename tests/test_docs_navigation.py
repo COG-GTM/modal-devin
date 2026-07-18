@@ -16,7 +16,8 @@ def _nav_pages() -> list[str]:
 
 
 def _doc_slugs() -> set[str]:
-    slugs = {"index"}
+    # The homepage is reached through the logo and intentionally omitted from the sidebar.
+    slugs = set()
     for directory in _DOC_DIRS:
         for path in (ROOT / directory).glob("*.mdx"):
             slugs.add(f"{directory}/{path.stem}")

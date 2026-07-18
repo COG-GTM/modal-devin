@@ -21,7 +21,8 @@ This reduces accidental exposure through environment dumps, child processes,
 diagnostics, and project tooling. A process inside the Sandbox can still exercise the
 allowed Outposts capability, so:
 
-- Use a least-privilege Devin service user.
+- Use a dedicated admin-scoped Enterprise service user. This broad scope is currently
+  required by the Outposts setup and worker flow.
 - Separate outposts and credentials for different trust environments.
 - Limit the session workload to credentials required for its work.
 

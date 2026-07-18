@@ -401,18 +401,23 @@ def init_worker(
     if out_path.exists():
         raise SystemExit(f"{out_path} already exists, not overwriting")
 
-    token = None  # the Devin Service User Key (env var DEVIN_OUTPOSTS_TOKEN), if we get one
+    # The admin-scoped Devin Enterprise service user key, if we get one.
+    token = None
     # Set once we register a *new* outpost; rolled back if a later step fails.
     created_outpost_id = None
 
     if not outpost_id:
         token = os.environ.get("DEVIN_OUTPOSTS_TOKEN")
         if not token and interactive:
-            _console.print(f"[dim]Grab a Devin Service User Key: {DEVIN_TOKEN_URL}[/dim]")
-            token = _ask("Devin Service User Key", password=True)
+            _console.print(
+                "[dim]Create a key for an admin-scoped Enterprise service user: "
+                f"{DEVIN_TOKEN_URL}[/dim]"
+            )
+            token = _ask("Admin-scoped Devin Enterprise service user key", password=True)
         if not token:
             raise SystemExit(
-                "DEVIN_OUTPOSTS_TOKEN is required to create a new outpost "
+                "DEVIN_OUTPOSTS_TOKEN is required to create a new outpost and must contain "
+                "an admin-scoped Enterprise service user key "
                 "(set the env var, or provide it when prompted)"
             )
 
@@ -459,9 +464,13 @@ def init_worker(
         _done(f"Modal secret [bold]{escape(secret_name)}[/bold] already exists")
     elif interactive:
         if not token:
-            _console.print(f"[dim]Grab a Devin Service User Key: {DEVIN_TOKEN_URL}[/dim]")
+            _console.print(
+                "[dim]Create a key for an admin-scoped Enterprise service user: "
+                f"{DEVIN_TOKEN_URL}[/dim]"
+            )
             token = _ask(
-                "Devin Service User Key [dim](leave blank to skip)[/dim]",
+                "Admin-scoped Devin Enterprise service user key "
+                "[dim](leave blank to skip)[/dim]",
                 password=True,
                 default="",
                 show_default=False,

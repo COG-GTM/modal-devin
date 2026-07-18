@@ -44,7 +44,8 @@ Generates one Python application in `OUTPOSTS_DIR`. In an interactive terminal, 
 
 <ParamField path="--secret-name" type="string" default="devin-outposts-token">
   Name of the [Modal Secret](https://modal.com/docs/guide/secrets) attached to both
-  generated functions. The Secret must expose `DEVIN_OUTPOSTS_TOKEN`.
+  generated functions. The Secret must expose `DEVIN_OUTPOSTS_TOKEN` containing the
+  key for a dedicated, admin-scoped Enterprise service user.
 </ParamField>
 
 <ParamField path="--outposts-dir" type="path" default="outposts">

@@ -5,14 +5,15 @@ icon: wand-magic-sparkles
 ---
 
 Use the setup wizard when you need a new outpost. It can configure
-Modal, create the outpost, store the Devin token, generate the application, and
+Modal, create the outpost, store the Devin service user key, generate the application, and
 deploy it.
 
 ## Before you begin
 
 You need [uv](https://docs.astral.sh/uv/getting-started/installation/), Python 3.11
 or newer, a Modal account, and a Devin organization with Outposts enabled. Have a
-Devin token authorized to create and serve outposts ready; the wizard asks for it
+service user key from an **admin-scoped Enterprise service user** ready. This broad
+scope is currently required to create and serve outposts. The wizard asks for the key
 without echoing it.
 
 <Steps>
@@ -33,9 +34,10 @@ without echoing it.
     generated filename, and Modal resources.
   </Step>
 
-  <Step title="Provide the Devin token">
-    The wizard uses the token to create the outpost and offers to store it as a
-    Modal Secret. Input is hidden, and the generated application excludes the token.
+  <Step title="Provide the Devin service user key">
+    Enter the key from the admin-scoped Enterprise service user. The wizard uses it
+    to create the outpost and offers to store it as a Modal Secret. Input is hidden,
+    and the generated application excludes the key.
   </Step>
 
   <Step title="Deploy">

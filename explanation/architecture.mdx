@@ -46,7 +46,9 @@ behind the `Worker` API.
 
 The raw Devin credential is kept out of the main session environment. The workload
 can still use the limited Outposts capability required to serve its assigned session,
-so use least-privilege credentials and separate outposts when trust requirements differ.
+so use a dedicated admin-scoped Enterprise service user and separate outposts and
+credentials when trust requirements differ. The broad service-user scope is currently
+required by the Outposts flow.
 
 ## Network requirements
 
