@@ -8,6 +8,10 @@ from modal_devin import ConfigurationError, WorkerSettings
 from modal_devin._config import WorkerConfig
 
 
+def test_worker_settings_default_to_three_second_polling():
+    assert WorkerSettings().scheduler_interval_seconds == 3
+
+
 def test_worker_config_derives_safe_bounded_modal_names():
     config = WorkerConfig(
         name="Production / Platform ✨ " + "x" * 100,

@@ -5,6 +5,13 @@ and uses semantic versioning.
 
 ## Unreleased
 
+## 0.1.8 - 2026-07-17
+
+### Changed
+
+- The default scheduler polling window is now 3 seconds, reducing the delay before
+  queued sessions are picked up.
+
 ## 0.1.7 - 2026-07-16
 
 ### Fixed
