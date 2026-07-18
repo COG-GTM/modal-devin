@@ -241,6 +241,109 @@ def test_deploy_without_a_file_or_outposts_reports_nothing_to_deploy(tmp_path, m
         cli.deploy(outposts_dir=tmp_path)
 
 
+def test_destroy_stops_the_modal_app_then_deletes_the_outpost(tmp_path, monkeypatch):
+    generated = initialize(tmp_path, monkeypatch)
+    monkeypatch.setenv("DEVIN_OUTPOSTS_TOKEN", "super-secret-token")
+    lookup = Mock(return_value=None)
+    monkeypatch.setattr(cli.modal, "App", SimpleNamespace(lookup=lookup))
+    stopped = []
+    monkeypatch.setattr(
+        cli,
+        "_modal_stop",
+        lambda name: stopped.append(name) or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    recorder = RecordingUrlOpen([{}])
+    monkeypatch.setattr(cli, "OutpostsClient", _fake_outposts_client(recorder))
+
+    cli.destroy(generated, yes=True)
+
+    lookup.assert_called_once_with("modal-devin-demo-pool", create_if_missing=False)
+    assert stopped == ["modal-devin-demo-pool"]
+    [request] = recorder.requests
+    assert request.full_url.endswith("/opbeta/outposts/outpost_env-demo")
+    assert request.get_method() == "DELETE"
+
+
+def test_destroy_deletes_an_outpost_when_the_modal_app_is_not_deployed(tmp_path, monkeypatch):
+    generated = initialize(tmp_path, monkeypatch)
+    monkeypatch.setenv("DEVIN_OUTPOSTS_TOKEN", "super-secret-token")
+
+    def lookup(name, *, create_if_missing):
+        raise cli.modal.exception.NotFoundError(f"app {name} not found")
+
+    monkeypatch.setattr(cli.modal, "App", SimpleNamespace(lookup=lookup))
+    monkeypatch.setattr(
+        cli,
+        "_modal_stop",
+        lambda name: (_ for _ in ()).throw(AssertionError("no deployed app")),
+    )
+    recorder = RecordingUrlOpen([{}])
+    monkeypatch.setattr(cli, "OutpostsClient", _fake_outposts_client(recorder))
+
+    cli.destroy(generated, yes=True)
+
+    assert len(recorder.requests) == 1
+
+
+def test_destroy_preserves_the_outpost_when_modal_stop_fails(tmp_path, monkeypatch):
+    generated = initialize(tmp_path, monkeypatch)
+    monkeypatch.setenv("DEVIN_OUTPOSTS_TOKEN", "super-secret-token")
+    monkeypatch.setattr(cli.modal, "App", SimpleNamespace(lookup=Mock(return_value=None)))
+    monkeypatch.setattr(
+        cli,
+        "_modal_stop",
+        lambda name: SimpleNamespace(returncode=7, stdout="", stderr="offline"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "OutpostsClient",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("outpost must be preserved")),
+    )
+
+    with pytest.raises(SystemExit, match=r"Destroy incomplete.*Modal stop"):
+        cli.destroy(generated, yes=True)
+
+
+def test_destroy_requires_yes_non_interactively_before_remote_changes(tmp_path, monkeypatch):
+    generated = initialize(tmp_path, monkeypatch)
+    monkeypatch.setenv("DEVIN_OUTPOSTS_TOKEN", "super-secret-token")
+    monkeypatch.setattr(
+        cli.modal,
+        "App",
+        SimpleNamespace(
+            lookup=lambda *a, **k: (_ for _ in ()).throw(AssertionError("remote lookup"))
+        ),
+    )
+
+    with pytest.raises(SystemExit, match="requires --yes"):
+        cli.destroy(generated)
+
+
+def test_destroy_rejects_unrecognizable_files_before_remote_changes(tmp_path, monkeypatch):
+    custom = tmp_path / "custom.py"
+    custom.write_text("print('not an outpost')")
+    monkeypatch.setattr(cli, "_interactive", lambda: False)
+    monkeypatch.setattr(
+        cli.modal,
+        "App",
+        SimpleNamespace(
+            lookup=lambda *a, **k: (_ for _ in ()).throw(AssertionError("remote lookup"))
+        ),
+    )
+
+    with pytest.raises(SystemExit, match="no resources were changed"):
+        cli.destroy(custom, yes=True)
+
+
+def test_modal_stop_uses_the_project_environment(monkeypatch):
+    modal_command = Mock(return_value=SimpleNamespace(returncode=0))
+    monkeypatch.setattr(cli, "_modal", modal_command)
+
+    cli._modal_stop("modal-devin-demo")
+
+    modal_command.assert_called_once_with("app", "stop", "--yes", "modal-devin-demo")
+
+
 def test_doctor_reports_failed_required_check(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_modal_is_configured", lambda: False)
     monkeypatch.setattr(cli, "_existing_secret_names", lambda: {"devin-outposts-token"})
@@ -262,6 +365,17 @@ def test_expected_app_name_reads_the_generated_worker_from_env_call(tmp_path, mo
     generated = initialize(tmp_path, monkeypatch)
 
     assert cli._expected_app_name(generated) == "modal-devin-demo-pool"
+
+
+def test_worker_config_reads_destroy_identifiers_without_executing_the_file(tmp_path, monkeypatch):
+    generated = initialize(tmp_path, monkeypatch, api_url="https://api.example.com")
+
+    config = cli._worker_config(generated)
+
+    assert config is not None
+    assert config.outpost_id == "outpost_env-demo"
+    assert config.api_url == "https://api.example.com"
+    assert config.app_name == "modal-devin-demo-pool"
 
 
 def test_expected_app_name_is_none_for_unrecognizable_files(tmp_path):
@@ -462,5 +576,6 @@ def test_cli_help_presents_the_project_level_workflow(capsys):
     output = capsys.readouterr().out
     assert "init" in output
     assert "deploy" in output
+    assert "destroy" in output
     assert "doctor" in output
-    assert "outpost" not in output
+    assert "│ outpost " not in output

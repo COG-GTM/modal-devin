@@ -60,6 +60,18 @@ creates a new application instead of performing a rolling update.
 
 Run `init` only for a new file; it preserves existing application code.
 
+## Retire an outpost
+
+After every active or resumable session is no longer needed, destroy one deployment:
+
+```bash
+uv run modal-devin destroy outposts/my_outpost.py
+```
+
+The command confirms interactively, stops the Modal app, and then deletes the Devin
+outpost. Use `--yes` for non-interactive operation. It retains the generated file and
+shared Modal Secret for deliberate cleanup or auditing.
+
 ## Rotate the Devin service user key
 
 Update the [Modal Secret](https://modal.com/docs/guide/secrets) referenced by the

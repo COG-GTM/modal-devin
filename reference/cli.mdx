@@ -1,6 +1,6 @@
 ---
 title: Command-line reference
-description: Complete reference for modal-devin init, deploy, doctor, and global options.
+description: Complete reference for modal-devin init, deploy, destroy, doctor, and global options.
 icon: terminal
 ---
 
@@ -20,6 +20,7 @@ for operating or automating an existing installation, not additional setup paths
 | --- | --- |
 | `init` | Create a Devin outpost, Modal Secret, generated Modal application, and deployment |
 | `deploy` | Deploy a generated outpost file through the current Python environment |
+| `destroy` | Stop Modal applications and delete their Devin outposts |
 | `doctor` | Check local credentials, secret presence, and runtime compatibility |
 | `--help`, `-h` | Display help |
 | `--version` | Display the installed application version |
@@ -125,6 +126,52 @@ failed:
 ```bash
 uv run modal-devin deploy
 uv run modal-devin deploy --outposts-dir deployments
+```
+
+## `modal-devin destroy`
+
+```text
+modal-devin destroy [OUTPOST-FILE] [--outposts-dir DIR] [--yes]
+```
+
+`destroy` permanently stops each selected Modal application and deletes its Devin
+outpost. Stopping a Modal application immediately terminates its running containers,
+including active session invocations.
+
+<ParamField path="OUTPOST-FILE" type="path">
+  Generated or handwritten Modal outpost application to tear down. Omit it to use
+  every `*.py` file found directly in `--outposts-dir`.
+</ParamField>
+
+<ParamField path="--outposts-dir" type="path" default="outposts">
+  Directory to scan for outpost files when `OUTPOST-FILE` is omitted.
+</ParamField>
+
+<ParamField path="--yes, -y" type="boolean" default="false">
+  Skip the destructive-action confirmation. This option is required when stdin or
+  stdout is not an interactive terminal.
+</ParamField>
+
+Set `DEVIN_OUTPOSTS_TOKEN` to an admin-scoped Enterprise service user key before
+running non-interactively. Interactive use prompts for the key if the environment
+variable is absent. The command reads each file's literal `Worker.from_env(...)`
+arguments without executing the file, then:
+
+1. Stops the matching deployed Modal app. An app that is not deployed is already in
+   the desired state.
+2. Deletes the Devin outpost only after the Modal app was stopped or found absent.
+
+All selected files are validated before any remote resource is changed. If a Modal
+lookup or stop fails, the linked Devin outpost is preserved so the running scheduler
+is not orphaned. The command continues across other selected files and reports all
+failures with a nonzero exit status.
+
+Generated files and Modal Secrets are deliberately retained. They may be inspected,
+archived, or removed separately after `destroy` succeeds.
+
+```bash
+uv run modal-devin destroy outposts/my_outpost.py --yes
+uv run modal-devin destroy --yes
 ```
 
 ## `modal-devin doctor`

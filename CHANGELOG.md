@@ -7,6 +7,9 @@ and uses semantic versioning.
 
 ### Added
 
+- `modal-devin destroy` safely stops the Modal apps declared by one or all generated
+  outpost files before deleting their Devin outposts. It requires confirmation,
+  preserves local files and shared secrets, and reports partial failures.
 - Running workers now poll their session's queue status and shut down once the
   session terminates or leaves the queue, instead of idling until the function
   timeout. The interval is configurable via `status_watchdog_interval_seconds`

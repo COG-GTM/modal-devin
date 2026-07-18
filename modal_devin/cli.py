@@ -64,8 +64,7 @@ OutpostIdOption = Annotated[
 OutpostFileArg = Annotated[
     Path,
     cyclopts.Parameter(
-        help="Generated Modal outpost file to deploy. Omit to deploy every outpost "
-        "file in --outposts-dir.",
+        help="Generated Modal outpost file. Omit to use every outpost file in --outposts-dir.",
         show_default=False,
     ),
 ]
@@ -86,6 +85,14 @@ DeployOption = Annotated[
     cyclopts.Parameter(
         help="Deploy the generated outpost file after writing it.",
         show_default=False,
+    ),
+]
+YesOption = Annotated[
+    bool,
+    cyclopts.Parameter(
+        name=("--yes", "-y"),
+        negative=False,
+        help="Skip the destructive-action confirmation.",
     ),
 ]
 
@@ -288,12 +295,12 @@ def _python_literal(value: str) -> str:
     return repr(value)
 
 
-def _expected_app_name(file: Path) -> str | None:
-    """The Modal app name a generated outpost file declares, without executing it.
+def _worker_config(file: Path) -> WorkerConfig | None:
+    """The worker identity a generated outpost file declares, without executing it.
 
-    Returns None for files whose `Worker.from_env(...)` call (or its name argument)
-    isn't statically recognizable -- e.g. heavily hand-edited files -- rather than
-    running arbitrary local code just to check on it.
+    Returns None for files whose `Worker.from_env(...)` call or required arguments
+    aren't statically recognizable -- e.g. heavily hand-edited files -- rather than
+    running arbitrary local code to inspect them.
     """
     try:
         tree = ast.parse(file.read_text(encoding="utf-8"))
@@ -307,17 +314,33 @@ def _expected_app_name(file: Path) -> str | None:
             and node.args
         ):
             continue
+        keywords = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+        outpost_id_node = keywords.get("outpost_id")
+        if outpost_id_node is None:
+            return None
+        api_url_node = keywords.get("api_url")
         try:
             name = ast.literal_eval(node.args[0])
-        except ValueError:
+            outpost_id = ast.literal_eval(outpost_id_node)
+            api_url = DEFAULT_API_URL if api_url_node is None else ast.literal_eval(api_url_node)
+        except (TypeError, ValueError):
             return None
-        if not isinstance(name, str):
+        if not all(isinstance(value, str) for value in (name, outpost_id, api_url)):
             return None
         try:
-            return WorkerConfig(name=name, outpost_id="doctor", api_url=DEFAULT_API_URL).app_name
+            return WorkerConfig(name=name, outpost_id=outpost_id, api_url=api_url)
         except ConfigurationError:
             return None
     return None
+
+
+def _expected_app_name(file: Path) -> str | None:
+    config = _worker_config(file)
+    return None if config is None else config.app_name
+
+
+def _modal_stop(app_name: str) -> subprocess.CompletedProcess[str]:
+    return _modal("app", "stop", "--yes", app_name)
 
 
 @app.command
@@ -354,6 +377,113 @@ def deploy(
         raise SystemExit(
             f"{len(failed)} of {len(outpost_files)} outpost(s) failed to deploy: {joined}"
         )
+
+
+@app.command
+def destroy(
+    outpost_file: OutpostFileArg | None = None,
+    *,
+    outposts_dir: OutpostsDirOption = Path("outposts"),
+    yes: YesOption = False,
+) -> None:
+    """Stop Modal applications and delete their Devin outposts."""
+    outpost_files = (
+        [outpost_file] if outpost_file is not None else sorted(outposts_dir.glob("*.py"))
+    )
+    if not outpost_files:
+        raise SystemExit(f"No outpost files found in {outposts_dir}")
+
+    targets: list[tuple[Path, WorkerConfig]] = []
+    for file in outpost_files:
+        config = _worker_config(file)
+        if config is None:
+            raise SystemExit(
+                f"Could not determine the outpost ID and Modal app name from {file}; "
+                "no resources were changed"
+            )
+        targets.append((file, config))
+
+    if not yes:
+        if not _interactive():
+            raise SystemExit("destroy requires --yes when run non-interactively")
+        count = len(targets)
+        if not _confirm(
+            f"Destroy {count} outpost{'s' if count != 1 else ''}? "
+            "This immediately stops Modal containers and permanently deletes the Devin "
+            f"outpost{'s' if count != 1 else ''}.",
+            default=False,
+        ):
+            _console.print("Destroy cancelled")
+            return
+
+    token = os.environ.get("DEVIN_OUTPOSTS_TOKEN")
+    if not token and _interactive():
+        token = _ask("Admin-scoped Devin Enterprise service user key", password=True)
+    if not token:
+        raise SystemExit(
+            "DEVIN_OUTPOSTS_TOKEN is required to delete Devin outposts "
+            "(set the env var, or provide it when prompted)"
+        )
+
+    failures: list[str] = []
+    for file, config in targets:
+        modal_ready = False
+        try:
+            modal.App.lookup(config.app_name, create_if_missing=False)
+        except modal.exception.NotFoundError:
+            _done(f"Modal app [bold]{escape(config.app_name)}[/bold] is not deployed")
+            modal_ready = True
+        except Exception as error:
+            _step_failed(
+                f"Could not inspect Modal app {escape(config.app_name)}: {escape(str(error))}"
+            )
+            failures.append(f"{file} (Modal lookup)")
+        else:
+            _step_start(f"Stopping Modal app {config.app_name}...")
+            try:
+                result = _modal_stop(config.app_name)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                _step_failed(
+                    f"Modal app {escape(config.app_name)} stop failed: {escape(str(error))}"
+                )
+                failures.append(f"{file} (Modal stop)")
+            else:
+                if result.returncode == 0:
+                    _step_done(f"Stopped Modal app [bold]{escape(config.app_name)}[/bold]")
+                    modal_ready = True
+                else:
+                    detail = (result.stderr or result.stdout).strip()
+                    suffix = (
+                        f": {escape(detail)}" if detail else f" (exit code {result.returncode})"
+                    )
+                    _step_failed(f"Modal app {escape(config.app_name)} stop failed{suffix}")
+                    failures.append(f"{file} (Modal stop)")
+
+        # Keep the Devin outpost intact if its worker may still be running. This makes a
+        # Modal credential or network failure retryable instead of leaving a live scheduler
+        # pointed at an outpost that has already disappeared.
+        if not modal_ready:
+            continue
+
+        _step_start(f"Deleting Devin outpost {config.outpost_id}...")
+        client = OutpostsClient(
+            config.api_url,
+            token,
+            timeout=DEFAULT_API_TIMEOUT_SECONDS,
+        )
+        try:
+            client.delete_outpost(config.outpost_id)
+        except OutpostsAPIError as error:
+            _step_failed(
+                f"Devin outpost {escape(config.outpost_id)} delete failed: {escape(str(error))}"
+            )
+            failures.append(f"{file} (Devin outpost delete)")
+        else:
+            _step_done(f"Deleted Devin outpost [bold]{escape(config.outpost_id)}[/bold]")
+
+    if failures:
+        joined = ", ".join(failures)
+        raise SystemExit(f"Destroy incomplete; failed: {joined}")
 
 
 @app.command(name="init")
