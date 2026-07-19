@@ -23,6 +23,17 @@ def _service_version() -> str:
         return "0+unknown"
 
 
+# Identifier attributes (not credentials) that Logfire's default scrubber would
+# otherwise redact because their names match patterns like "session".
+_SCRUBBING_EXEMPT_ATTRIBUTES = {"devin.session.id"}
+
+
+def _keep_identifier_attributes(match: logfire.ScrubMatch) -> object:
+    if match.path and match.path[-1] in _SCRUBBING_EXEMPT_ATTRIBUTES:
+        return match.value
+    return None
+
+
 def configure_observability(config: WorkerConfig) -> None:
     """Configure Logfire once per Modal container.
 
@@ -42,6 +53,7 @@ def configure_observability(config: WorkerConfig) -> None:
             service_version=_service_version(),
             console=False,
             distributed_tracing=True,
+            scrubbing=logfire.ScrubbingOptions(callback=_keep_identifier_attributes),
         )
         _configured = True
 

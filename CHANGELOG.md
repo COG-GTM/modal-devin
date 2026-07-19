@@ -5,6 +5,13 @@ and uses semantic versioning.
 
 ## Unreleased
 
+### Fixed
+
+- The `devin.session.id` span attribute is no longer redacted by Logfire's default
+  scrubber (which flags any attribute name matching "session"). Session IDs are
+  identifiers, not credentials, and are the primary key for correlating a session's
+  trace; other scrubber matches are still redacted.
+
 ## 0.1.10 - 2026-07-18
 
 ### Removed
