@@ -19,8 +19,12 @@ DEFAULT_API_TIMEOUT_SECONDS = 30.0
 DEFAULT_SNAPSHOT_TTL_SECONDS = 30 * 24 * 60 * 60
 DEFAULT_STATUS_ATTEMPTS = 3
 DEFAULT_STATUS_RETRY_DELAY_SECONDS = 1.0
-DEFAULT_STATUS_WATCHDOG_INTERVAL_SECONDS = 60.0
-DEFAULT_SESSION_ATTACH_TIMEOUT_SECONDS = 120.0
+# Observed attach latency is bimodal: a healthy remote attaches within
+# milliseconds of the gateway connecting, or it never attaches at all. There is
+# no legitimate slow-but-eventually-successful case to protect against, so both
+# values stay just long enough to absorb jitter, not to wait out a real delay.
+DEFAULT_STATUS_WATCHDOG_INTERVAL_SECONDS = 10.0
+DEFAULT_SESSION_ATTACH_TIMEOUT_SECONDS = 20.0
 DEFAULT_SANDBOX_READY_TIMEOUT_SECONDS = 120
 DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 120
 DEFAULT_CLAIM_CONNECT_MARGIN_SECONDS = 15

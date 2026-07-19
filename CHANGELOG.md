@@ -5,6 +5,18 @@ and uses semantic versioning.
 
 ## Unreleased
 
+## 0.1.12 - 2026-07-19
+
+### Changed
+
+- Workers now notice and recover from a stuck attach much faster: the
+  `session_attach_timeout_seconds` default dropped from 120s to 20s, and
+  `status_watchdog_interval_seconds` from 60s to 10s. In practice a healthy
+  session attaches within milliseconds, so there was no benefit to waiting
+  two minutes before giving up and redispatching. Both remain configurable via
+  `MODAL_DEVIN_SESSION_ATTACH_TIMEOUT_SECONDS` /
+  `MODAL_DEVIN_STATUS_WATCHDOG_INTERVAL_SECONDS`.
+
 ## 0.1.11 - 2026-07-19
 
 ### Added
