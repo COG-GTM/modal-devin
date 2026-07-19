@@ -5,6 +5,8 @@ and uses semantic versioning.
 
 ## Unreleased
 
+## 0.1.10 - 2026-07-18
+
 ### Removed
 
 - The Caddy credential-boundary sidecar. In the direct-serve hand-off the Devin CLI
