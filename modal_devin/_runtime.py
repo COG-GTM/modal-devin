@@ -26,6 +26,7 @@ from modal_devin._exceptions import (
     ClaimDeadlineError,
     OutpostsAPIError,
     OutpostsProtocolError,
+    SessionAttachTimeoutError,
     SessionStatusUnknownError,
     WorkerExitedError,
 )
@@ -51,6 +52,45 @@ _UNSERVABLE_STATUSES = _TERMINAL_STATUSES | {SessionStatus.SUSPENDED}
 # missed the session-end notification (the status can briefly read suspended while
 # a healthy remote is still flushing its own clean exit).
 _SUSPENDED_LIVENESS_STRIKES = 3
+# The remote's own log line for a live gateway websocket, and the RPC log markers
+# that prove Devin's brain actually attached to it. A websocket that connects but
+# never receives an RPC is a dead session from the user's point of view ("your
+# outpost machine is connecting" forever); only a fresh connection recovers it.
+_GATEWAY_CONNECT_MARKER = "connected to outpost gateway"
+_BRAIN_ATTACH_MARKERS = (
+    "subscribe_remote_events",
+    "hands_invoke",
+    "prepare_tool",
+    "execute_tool",
+)
+
+
+class _AttachState:
+    """What the worker's own log stream proves about the gateway connection."""
+
+    __slots__ = ("attached", "connected_at")
+
+    def __init__(self) -> None:
+        self.connected_at: float | None = None
+        self.attached = False
+
+    def observe(self, line: str) -> None:
+        if self.attached:
+            return
+        if any(marker in line for marker in _BRAIN_ATTACH_MARKERS):
+            self.attached = True
+        elif _GATEWAY_CONNECT_MARKER in line:
+            # A reconnect restarts the attach clock.
+            self.connected_at = time.time()
+
+    def timed_out(self, timeout_seconds: float) -> bool:
+        return (
+            not self.attached
+            and self.connected_at is not None
+            and time.time() - self.connected_at >= timeout_seconds
+        )
+
+
 _SNAPSHOT_KEY_PREFIX = "__modal_devin_snapshot__:"
 _DISPATCH_KEY_PREFIX = "__modal_devin_dispatch__:"
 _DISPATCH_EXPIRY_KEY = "expires_at"
@@ -348,6 +388,9 @@ def _watch_session_liveness(
     interval_seconds: float,
     stop: threading.Event,
     ended: threading.Event,
+    attach_state: _AttachState,
+    attach_timeout_seconds: float,
+    attach_timed_out: threading.Event,
 ) -> None:
     """Kill the sandbox once the session ends without the remote noticing.
 
@@ -355,9 +398,26 @@ def _watch_session_liveness(
     while the remote runs and terminate it themselves once the session reaches a
     terminal state or its queue entry disappears; otherwise a remote that missed
     the session-end notification idles until the function timeout.
+
+    The same loop enforces the attach timeout: a remote whose gateway websocket
+    connected but never received an RPC is unreachable from Devin's side, and only
+    a fresh worker connection recovers it.
     """
     suspended_strikes = 0
     while not stop.wait(interval_seconds):
+        if attach_state.timed_out(attach_timeout_seconds):
+            logger.warning(
+                "[%s] gateway connected but Devin has not attached within %.0f seconds; "
+                "terminating the sandbox so a fresh worker reconnects",
+                session_id,
+                attach_timeout_seconds,
+            )
+            attach_timed_out.set()
+            try:
+                sandbox.terminate()
+            except Exception:
+                logger.exception("[%s] sandbox termination after attach timeout failed", session_id)
+            return
         try:
             status = client.session_status(session_id)
         except (OutpostsAPIError, OutpostsProtocolError) as error:
@@ -471,6 +531,8 @@ def _run_claimed_session(
             )
             watchdog_stop = threading.Event()
             session_ended_externally = threading.Event()
+            attach_state = _AttachState()
+            attach_timed_out = threading.Event()
             watchdog = threading.Thread(
                 target=_watch_session_liveness,
                 args=(client, sandbox),
@@ -479,6 +541,9 @@ def _run_claimed_session(
                     "interval_seconds": settings.status_watchdog_interval_seconds,
                     "stop": watchdog_stop,
                     "ended": session_ended_externally,
+                    "attach_state": attach_state,
+                    "attach_timeout_seconds": settings.session_attach_timeout_seconds,
+                    "attach_timed_out": attach_timed_out,
                 },
                 name=f"session-liveness-{session_id}",
                 daemon=True,
@@ -486,15 +551,19 @@ def _run_claimed_session(
             watchdog.start()
             try:
                 for line in process.stdout:
+                    attach_state.observe(line)
                     logger.info("[%s] %s", session_id, line.rstrip())
                 returncode = process.wait()
             except Exception:
-                if not session_ended_externally.is_set():
+                if not (session_ended_externally.is_set() or attach_timed_out.is_set()):
                     raise
                 returncode = None
             finally:
                 watchdog_stop.set()
             logger.info("[%s] Devin worker exited with status %s", session_id, returncode)
+
+        if attach_timed_out.is_set():
+            raise SessionAttachTimeoutError(session_id, settings.session_attach_timeout_seconds)
 
         if session_ended_externally.is_set():
             logger.info(

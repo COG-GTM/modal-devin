@@ -879,6 +879,9 @@ def test_liveness_watchdog_tolerates_transient_suspended_readings():
         interval_seconds=0,
         stop=threading.Event(),
         ended=ended,
+        attach_state=runtime._AttachState(),
+        attach_timeout_seconds=120,
+        attach_timed_out=threading.Event(),
     )
 
     assert client.statuses == []
@@ -901,6 +904,9 @@ def test_liveness_watchdog_retries_transport_failures():
         interval_seconds=0,
         stop=threading.Event(),
         ended=ended,
+        attach_state=runtime._AttachState(),
+        attach_timeout_seconds=120,
+        attach_timed_out=threading.Event(),
     )
 
     assert ended.is_set()
@@ -980,3 +986,107 @@ def test_execute_session_prefers_the_claims_pin(monkeypatch, config, settings):
     )
 
     assert run.call_args.kwargs["remote_binary_sha"] == "aaa111"
+
+
+def test_attach_state_requires_rpc_activity_after_gateway_connect(monkeypatch):
+    monkeypatch.setattr(runtime.time, "time", Mock(return_value=1_000.0))
+    state = runtime._AttachState()
+
+    assert not state.timed_out(120)
+
+    state.observe("... connected to outpost gateway endpoint=wss://...")
+    assert state.connected_at == 1_000.0
+    assert not state.timed_out(120)
+
+    monkeypatch.setattr(runtime.time, "time", Mock(return_value=1_200.0))
+    assert state.timed_out(120)
+
+    state.observe("... remote.hands_invoke{request=...}")
+    assert state.attached
+    assert not state.timed_out(120)
+
+
+def test_attach_state_reconnect_restarts_the_clock(monkeypatch):
+    monkeypatch.setattr(runtime.time, "time", Mock(return_value=1_000.0))
+    state = runtime._AttachState()
+    state.observe("connected to outpost gateway")
+
+    monkeypatch.setattr(runtime.time, "time", Mock(return_value=1_119.0))
+    state.observe("connected to outpost gateway")
+
+    monkeypatch.setattr(runtime.time, "time", Mock(return_value=1_130.0))
+    assert not state.timed_out(120)
+
+
+def test_watchdog_terminates_a_connected_but_unattached_worker(monkeypatch):
+    monkeypatch.setattr(runtime.time, "time", Mock(return_value=1_000.0))
+    state = runtime._AttachState()
+    state.observe("connected to outpost gateway")
+    monkeypatch.setattr(runtime.time, "time", Mock(return_value=2_000.0))
+    client = Client(status=SessionStatus.RUNNING)
+    sandbox = Sandbox()
+    ended = threading.Event()
+    attach_timed_out = threading.Event()
+
+    runtime._watch_session_liveness(
+        cast(OutpostsClient, client),
+        cast(modal.Sandbox, sandbox),
+        session_id="devin-1",
+        interval_seconds=0,
+        stop=threading.Event(),
+        ended=ended,
+        attach_state=state,
+        attach_timeout_seconds=120,
+        attach_timed_out=attach_timed_out,
+    )
+
+    assert attach_timed_out.is_set()
+    assert sandbox.terminated
+    assert not ended.is_set()
+
+
+class SilentConnectedSandbox(Sandbox):
+    """A worker that connects to the gateway and then never receives an RPC."""
+
+    def exec(self, *args, **kwargs):
+        self.exec_calls.append((args, kwargs))
+        sandbox = self
+
+        class SilentProcess:
+            def __init__(self):
+                self.stdout = self._lines()
+
+            def _lines(self):
+                yield "connected to outpost gateway\n"
+                while not sandbox.terminated:
+                    time.sleep(0.005)
+
+            def wait(self):
+                raise RuntimeError("stream reset by sandbox termination")
+
+        return SilentProcess()
+
+
+def test_attach_timeout_fails_the_invocation_for_redispatch(monkeypatch, config):
+    settings = WorkerSettings(
+        status_attempts=3,
+        status_retry_delay_seconds=0,
+        status_watchdog_interval_seconds=0.01,
+        session_attach_timeout_seconds=0.05,
+    )
+    client = Client(status=SessionStatus.RUNNING)
+    sandbox = SilentConnectedSandbox()
+    store = Store()
+
+    with pytest.raises(runtime.SessionAttachTimeoutError):
+        run_claimed(
+            monkeypatch,
+            config=config,
+            settings=settings,
+            client=cast(OutpostsClient, client),
+            store=store,
+            sandbox=sandbox,
+        )
+
+    assert sandbox.terminated
+    assert sandbox.snapshot_calls == []

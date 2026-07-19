@@ -10,6 +10,7 @@ from modal_devin._exceptions import (
     ModalDevinError,
     OutpostsAPIError,
     OutpostsProtocolError,
+    SessionAttachTimeoutError,
     SessionStatusUnknownError,
     WorkerExitedError,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "ModalDevinError",
     "OutpostsAPIError",
     "OutpostsProtocolError",
+    "SessionAttachTimeoutError",
     "SessionStatusUnknownError",
     "Worker",
     "WorkerExitedError",

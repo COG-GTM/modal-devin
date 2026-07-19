@@ -5,6 +5,19 @@ and uses semantic versioning.
 
 ## Unreleased
 
+### Added
+
+- Workers now enforce an attach timeout. A remote can connect to the outpost
+  gateway and hold a perfectly healthy websocket that Devin's side never attaches
+  to, leaving the session stuck at "your outpost machine is connecting" until a
+  human intervenes — only a fresh connection recovers it. The worker watches its
+  own log stream for the gateway connection and the first RPC; if Devin has not
+  attached within `session_attach_timeout_seconds`
+  (`MODAL_DEVIN_SESSION_ATTACH_TIMEOUT_SECONDS`, default 120 seconds) of
+  connecting, the invocation fails with `SessionAttachTimeoutError`, the claim is
+  released, and the scheduler redispatches a fresh worker whose new connection
+  attaches. Reconnects restart the clock.
+
 ### Fixed
 
 - The `devin.session.id` span attribute is no longer redacted by Logfire's default

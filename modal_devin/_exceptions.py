@@ -31,6 +31,18 @@ class ClaimDeadlineError(ModalDevinError):
     """A claimed session cannot connect safely before its readiness deadline."""
 
 
+class SessionAttachTimeoutError(ModalDevinError):
+    """The remote connected to the gateway but Devin never attached to it."""
+
+    def __init__(self, session_id: str, timeout_seconds: float) -> None:
+        self.session_id = session_id
+        super().__init__(
+            f"Devin did not attach to the worker for {session_id!r} within "
+            f"{timeout_seconds:g} seconds of its gateway connection; the invocation "
+            "failed so a fresh worker reconnects"
+        )
+
+
 class WorkerExitedError(ModalDevinError):
     """The Devin worker process exited unsuccessfully."""
 
