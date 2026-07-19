@@ -119,15 +119,7 @@ def test_generated_app_reads_typed_worker_settings_from_env(tmp_path, monkeypatc
     assert worker.settings.session_timeout_seconds == 900
 
 
-def test_generated_app_does_not_build_sidecar_at_import(tmp_path, monkeypatch):
-    from modal_devin import _runtime
-
-    monkeypatch.setattr(
-        _runtime,
-        "_build_sidecar_image_id",
-        lambda *_: (_ for _ in ()).throw(AssertionError("build at import")),
-    )
-
+def test_generated_app_imports_without_remote_calls(tmp_path, monkeypatch):
     generated = initialize(tmp_path, monkeypatch)
 
     runpy.run_path(str(generated))

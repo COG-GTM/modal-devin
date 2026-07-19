@@ -24,25 +24,21 @@ from modal_devin._config import (
 )
 from modal_devin._exceptions import (
     ClaimDeadlineError,
-    ModalCompatibilityError,
     OutpostsAPIError,
     OutpostsProtocolError,
     SessionStatusUnknownError,
     WorkerExitedError,
 )
-from modal_devin.images import (
-    _DEVIN_BIN,
-    _DUMMY_TOKEN,
-    _SIDECAR_PORT,
-    _SIDECAR_RECIPE_DIGEST,
-    _build_sidecar_image_id,
-    _create_sidecar,
-)
+from modal_devin.images import _DEVIN_BIN
 
 logger = logging.getLogger("modal_devin.worker")
 
 WORKDIR = "/root/workspace"
-_SIDECAR_IMAGE_KEY = f"__modal_devin_sidecar_image_id__:{_SIDECAR_RECIPE_DIGEST}"
+# In direct-serve mode (DEVIN_REMOTE_SESSION_TOKEN set) the CLI never contacts the
+# queue API, but it refuses to start without *a* token present. This placeholder
+# satisfies the presence check while keeping the real service user token out of the
+# Sandbox entirely; the remote authenticates with the session-scoped connect token.
+_PLACEHOLDER_TOKEN = "cog_sidecarmanaged00000000000000000000000000000000"
 _TERMINAL_STATUSES = {
     SessionStatus.EXIT,
     SessionStatus.ERROR,
@@ -90,7 +86,6 @@ def _dispatch_lease_seconds(settings: WorkerSettings) -> int:
     return math.ceil(
         settings.api_timeout_seconds
         + settings.sandbox_ready_timeout_seconds
-        + settings.sidecar_ready_timeout_seconds
         + settings.claim_connect_margin_seconds
     )
 
@@ -290,23 +285,6 @@ def _create_sandbox(
     )
 
 
-def _wait_for_sidecar(sandbox: modal.Sandbox, *, timeout_seconds: int) -> None:
-    attempts = max(1, math.ceil(timeout_seconds / 0.2))
-    process = sandbox.exec(
-        "sh",
-        "-c",
-        f"for i in $(seq 1 {attempts}); do "
-        f"curl -fsS http://caddy:{_SIDECAR_PORT}/_modal_devin/health -o /dev/null "
-        f"&& exit 0; sleep 0.2; done; "
-        f"curl -v http://caddy:{_SIDECAR_PORT}/_modal_devin/health 2>&1; exit 1",
-    )
-    if process.wait() != 0:
-        raise RuntimeError(
-            f"Caddy sidecar did not become ready within {timeout_seconds} seconds:\n"
-            + process.stdout.read()
-        )
-
-
 def _final_status(
     client: OutpostsClient,
     *,
@@ -420,8 +398,7 @@ def _run_claimed_session(
     claim_deadline: str | None,
     connect_token: str | None,
     gateway_url: str | None,
-    remote_binary_sha: str | None = None,
-    sidecar_image_id: str,
+    remote_binary_sha: str | None,
     sandbox_options: Mapping[str, Any],
 ) -> None:
     sandbox: modal.Sandbox | None = None
@@ -437,9 +414,7 @@ def _run_claimed_session(
             sandbox_ready_timeout = _deadline_limited_timeout(
                 settings.sandbox_ready_timeout_seconds,
                 deadline_epoch=deadline_epoch,
-                reserve_seconds=(
-                    settings.sidecar_ready_timeout_seconds + settings.claim_connect_margin_seconds
-                ),
+                reserve_seconds=settings.claim_connect_margin_seconds,
             )
             sandbox = _create_sandbox(
                 app=app,
@@ -450,40 +425,28 @@ def _run_claimed_session(
                 readiness_timeout_seconds=sandbox_ready_timeout,
                 sandbox_options=sandbox_options,
             )
-            try:
-                _create_sidecar(
-                    sandbox,
-                    sidecar_image_id=sidecar_image_id,
-                    api_url=config.api_url,
-                    token=client.token,
-                )
-            except modal.exception.NotFoundError:
-                snapshot_store.pop(_SIDECAR_IMAGE_KEY, None)
-                raise
-            sidecar_ready_timeout = _deadline_limited_timeout(
-                settings.sidecar_ready_timeout_seconds,
-                deadline_epoch=deadline_epoch,
-                reserve_seconds=settings.claim_connect_margin_seconds,
-            )
-            _wait_for_sidecar(sandbox, timeout_seconds=sidecar_ready_timeout)
             _deadline_limited_timeout(
                 1,
                 deadline_epoch=deadline_epoch,
                 reserve_seconds=settings.claim_connect_margin_seconds,
             )
 
+        # Direct-serve mode: the CLI cannot parse this API's claim responses (fresh or
+        # redundant, verified live 2026-07-19), so the documented claim-mode hand-off
+        # is unusable and the orchestrator's own claim is handed over via the
+        # session-scoped connect token instead.
         exec_env: dict[str, str | None] = {
-            "DEVIN_API_URL": f"http://caddy:{_SIDECAR_PORT}",
-            "DEVIN_OUTPOSTS_TOKEN": _DUMMY_TOKEN,
+            "DEVIN_API_URL": config.api_url,
+            "DEVIN_OUTPOSTS_TOKEN": _PLACEHOLDER_TOKEN,
         }
         if connect_token is not None:
             exec_env["DEVIN_REMOTE_SESSION_TOKEN"] = connect_token
             if gateway_url is not None:
                 exec_env["DEVIN_OUTPOST_GATEWAY_URL"] = gateway_url
         if remote_binary_sha is not None:
-            # With DEVIN_REMOTE_SESSION_TOKEN set, the CLI serves the session without
-            # reading its queue entry, so it never sees spec.remote_binary_sha and
-            # would boot the latest published remote instead of the session's pin.
+            # In direct-serve mode the CLI never reads the queue entry, so it must be
+            # told about spec.remote_binary_sha or it boots the latest published
+            # remote instead of the session's pin.
             exec_env["DEVIN_WORKER_REMOTE_SHA"] = remote_binary_sha
 
         with observability.span(
@@ -672,9 +635,6 @@ def _execute_session(
             acceptor_id,
             claim.deadline,
         )
-        sidecar_image_id = snapshot_store.get(_SIDECAR_IMAGE_KEY)
-        if not isinstance(sidecar_image_id, str):
-            raise ModalCompatibilityError("worker sidecar image has not been prepared")
         remote_binary_sha = claim.remote_binary_sha
         if remote_binary_sha is None:
             try:
@@ -699,7 +659,6 @@ def _execute_session(
             connect_token=claim.connect_token,
             gateway_url=claim.gateway_url,
             remote_binary_sha=remote_binary_sha,
-            sidecar_image_id=sidecar_image_id,
             sandbox_options=sandbox_options,
         )
     except BaseException as error:
@@ -774,16 +733,6 @@ def _dispatch_pending_sessions(
         raise
     if not pending:
         return
-
-    sidecar_image_id = snapshot_store.get(_SIDECAR_IMAGE_KEY)
-    if not isinstance(sidecar_image_id, str):
-        try:
-            with observability.span("modal-devin sidecar image build", config=config):
-                sidecar_image_id = _build_sidecar_image_id(config.image_build_app_name)
-                snapshot_store.put(_SIDECAR_IMAGE_KEY, sidecar_image_id)
-        except Exception:
-            logger.exception("sidecar image build failed before dispatching sessions")
-            raise
 
     dispatch_failures: list[Exception] = []
     for session in pending:

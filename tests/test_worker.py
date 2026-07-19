@@ -68,7 +68,6 @@ def test_session_function_timeout_includes_startup_and_cleanup_margin():
         settings=WorkerSettings(
             session_timeout_seconds=900,
             sandbox_ready_timeout_seconds=45,
-            sidecar_ready_timeout_seconds=20,
             snapshot_timeout_seconds=30,
             api_timeout_seconds=10,
             status_attempts=3,
@@ -76,7 +75,7 @@ def test_session_function_timeout_includes_startup_and_cleanup_margin():
         ),
     )
 
-    assert worker.session_function_timeout_seconds == 1081
+    assert worker.session_function_timeout_seconds == 1061
 
 
 def test_run_session_delegates_runtime_mechanics(monkeypatch):
@@ -178,7 +177,6 @@ def test_public_api_does_not_expose_runtime_wiring():
     assert "Worker" in modal_devin.__all__
     assert "dispatch_pending_sessions" not in modal_devin.__all__
     assert "execute_session" not in modal_devin.__all__
-    assert "build_sidecar_image_id" not in modal_devin.__all__
 
 
 def test_version_has_one_metadata_source():

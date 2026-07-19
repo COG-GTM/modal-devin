@@ -8,21 +8,21 @@ icon: shield-halved
 when it cannot establish a safe session state. An arbitrary session workload can still
 use its assigned Outposts capability.
 
-## Devin credential boundary
+## Devin credential handling
 
-Both orchestration and the worker need to communicate with Devin. The generated Modal
-functions receive the configured [Secret](https://modal.com/docs/guide/secrets), but
-the raw token is kept out of the main Sandbox environment.
+The generated Modal functions receive the configured
+[Secret](https://modal.com/docs/guide/secrets) and use it for all queue API calls —
+claiming, status checks, and release. Those calls happen in the Modal function
+process, outside the Sandbox that runs the session.
 
-The worker communicates through a restricted local credential boundary that permits
-the Outposts API capability it needs. Other API paths are rejected.
+The Sandbox itself never receives the service user token. The claimed session is
+handed to the Devin CLI with a short-lived, session-scoped connect token, which is
+the only Devin credential the session workload can reach. Compromising a session
+therefore exposes that one session's connection, not the queue-wide credential.
 
-This reduces accidental exposure through environment dumps, child processes,
-diagnostics, and project tooling. A process inside the Sandbox can still exercise the
-allowed Outposts capability, so:
-
-- Use a dedicated admin-scoped Enterprise service user. This broad scope is currently
-  required by the Outposts setup and worker flow.
+- Use a dedicated Enterprise service user with only the Outposts scopes
+  (`account.outposts.machine`, plus `account.outposts.orchestrator` where outposts
+  are created or deleted), and set an expiration.
 - Separate outposts and credentials for different trust environments.
 - Limit the session workload to credentials required for its work.
 

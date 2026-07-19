@@ -5,6 +5,26 @@ and uses semantic versioning.
 
 ## Unreleased
 
+### Removed
+
+- The Caddy credential-boundary sidecar. In the direct-serve hand-off the Devin CLI
+  never contacts the queue API from inside the Sandbox, so the sidecar proxied
+  nothing but its own health check; the service user token now never enters the
+  Sandbox in any form (the CLI's token presence check is satisfied with an inert
+  placeholder, and the remote authenticates with its session-scoped connect token).
+  Workers start faster with no sidecar image build or readiness wait, and the
+  `sidecar_ready_timeout_seconds` setting
+  (`MODAL_DEVIN_SIDECAR_READY_TIMEOUT_SECONDS`) is removed; passing it to
+  `WorkerSettings` is now an error.
+
+### Known issues
+
+- Serving sessions through the Devin CLI's documented claim mode (rather than the
+  connect-token direct-serve hand-off) is blocked upstream: `devin` CLI 3000.1.27
+  cannot parse claim responses from the Outposts API — including a fresh claim of
+  a pending session — and exits with "failed to parse claim response". Direct-serve
+  remains the serve path until a fixed CLI is released.
+
 ## 0.1.9 - 2026-07-18
 
 ### Added

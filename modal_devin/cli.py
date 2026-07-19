@@ -679,12 +679,6 @@ def doctor(
     """Check local Modal and worker-runtime prerequisites."""
     failures = 0
 
-    if hasattr(modal.Sandbox, "_experimental_sidecars"):
-        _done("Installed Modal SDK exposes Sandbox sidecars")
-    else:
-        _step_failed("Installed Modal SDK does not expose Sandbox sidecars")
-        failures += 1
-
     if _modal_is_configured():
         _done("Modal credentials are valid")
     else:

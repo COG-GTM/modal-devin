@@ -32,7 +32,7 @@ MODAL_DEVIN_LOG_LEVEL=DEBUG
 
 The scheduler and session runtimes include Pydantic Logfire instrumentation. Every
 scheduler poll creates a trace, and each dispatched session continues that trace
-through claim acquisition, Sandbox and sidecar startup, the Devin worker process,
+through claim acquisition, Sandbox startup, the Devin worker process,
 final status handling, and claim release. The handoff uses a W3C OpenTelemetry trace
 carrier stored with the short-lived dispatch lease, so it crosses the remote Modal
 function boundary without changing the generated function signature.

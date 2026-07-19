@@ -21,7 +21,6 @@ DEFAULT_STATUS_ATTEMPTS = 3
 DEFAULT_STATUS_RETRY_DELAY_SECONDS = 1.0
 DEFAULT_STATUS_WATCHDOG_INTERVAL_SECONDS = 60.0
 DEFAULT_SANDBOX_READY_TIMEOUT_SECONDS = 120
-DEFAULT_SIDECAR_READY_TIMEOUT_SECONDS = 60
 DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 120
 DEFAULT_CLAIM_CONNECT_MARGIN_SECONDS = 15
 
@@ -71,7 +70,6 @@ class WorkerSettings:
     status_retry_delay_seconds: float = DEFAULT_STATUS_RETRY_DELAY_SECONDS
     status_watchdog_interval_seconds: float = DEFAULT_STATUS_WATCHDOG_INTERVAL_SECONDS
     sandbox_ready_timeout_seconds: int = DEFAULT_SANDBOX_READY_TIMEOUT_SECONDS
-    sidecar_ready_timeout_seconds: int = DEFAULT_SIDECAR_READY_TIMEOUT_SECONDS
     snapshot_timeout_seconds: int = DEFAULT_SNAPSHOT_TIMEOUT_SECONDS
     claim_connect_margin_seconds: int = DEFAULT_CLAIM_CONNECT_MARGIN_SECONDS
     log_level: str = "INFO"
@@ -84,7 +82,6 @@ class WorkerSettings:
             "status_attempts",
             "status_watchdog_interval_seconds",
             "sandbox_ready_timeout_seconds",
-            "sidecar_ready_timeout_seconds",
             "snapshot_timeout_seconds",
             "claim_connect_margin_seconds",
         )
@@ -113,7 +110,6 @@ class WorkerSettings:
             "session_timeout_seconds",
             "status_attempts",
             "sandbox_ready_timeout_seconds",
-            "sidecar_ready_timeout_seconds",
             "snapshot_timeout_seconds",
             "claim_connect_margin_seconds",
         }
@@ -154,7 +150,6 @@ def _sandbox_lifetime_seconds(settings: WorkerSettings) -> int:
     return math.ceil(
         settings.session_timeout_seconds
         + settings.sandbox_ready_timeout_seconds
-        + settings.sidecar_ready_timeout_seconds
         + _status_budget_seconds(settings)
         + settings.snapshot_timeout_seconds
         + _TERMINATION_MARGIN_SECONDS
@@ -197,7 +192,3 @@ class WorkerConfig:
     @property
     def snapshot_store_name(self) -> str:
         return f"modal-devin-{self.resource_slug}-snapshots"
-
-    @property
-    def image_build_app_name(self) -> str:
-        return f"modal-devin-{self.resource_slug}-image-builds"
