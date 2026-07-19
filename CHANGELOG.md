@@ -5,6 +5,8 @@ and uses semantic versioning.
 
 ## Unreleased
 
+## 0.1.11 - 2026-07-19
+
 ### Added
 
 - Workers now enforce an attach timeout. A remote can connect to the outpost
