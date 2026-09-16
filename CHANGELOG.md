@@ -5,6 +5,12 @@ and uses semantic versioning.
 
 ## Unreleased
 
+### Added
+
+- `modal-devin init` and `OutpostsClient.create_outpost` now validate outpost names locally
+  (lowercase letters, digits, dashes, underscores) before calling the API; interactive runs
+  re-prompt instead of failing.
+
 ## 0.1.13 - 2026-09-16
 
 ### Fixed

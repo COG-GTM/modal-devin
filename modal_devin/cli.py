@@ -26,7 +26,12 @@ from rich.text import Text
 
 from modal_devin import ConfigurationError, OutpostsAPIError, Worker
 from modal_devin._client import OutpostsClient
-from modal_devin._config import DEFAULT_API_TIMEOUT_SECONDS, DEFAULT_API_URL, WorkerConfig
+from modal_devin._config import (
+    DEFAULT_API_TIMEOUT_SECONDS,
+    DEFAULT_API_URL,
+    WorkerConfig,
+    validate_outpost_name,
+)
 
 app = cyclopts.App(name="modal-devin")
 
@@ -514,25 +519,38 @@ def init_worker(
             )
         _console.print()
 
+    if interactive and not name:
+        _console.print(
+            "[dim]Choose a name people will recognize when selecting a machine in Devin, "
+            "like gpu-h200 or production-vpc (lowercase letters, digits, dashes, and underscores)."
+            "[/dim]"
+        )
+    while True:
+        while not name:
+            if not interactive:
+                raise SystemExit("NAME is required (pass it as an argument, or run interactively)")
+            question = (
+                "What would you like to call this outpost?"
+                if outpost_id
+                else "What would you like to name your new outpost?"
+            )
+            name = _ask(question)
+        if outpost_id:
+            break
+        try:
+            validate_outpost_name(name)
+        except ConfigurationError as error:
+            if not interactive:
+                raise SystemExit(str(error)) from error
+            _console.print(f"[red]{escape(str(error))}[/red]")
+            name = ""
+            continue
+        break
+
     if interactive and not _modal_is_configured() and _confirm("Set up Modal now?", default=True):
         subprocess.run([sys.executable, "-m", "modal", "setup"])
         if _modal_is_configured():
             _done("Modal is set up")
-
-    if interactive and not name:
-        _console.print(
-            "[dim]Choose a name people will recognize when selecting a machine in Devin, "
-            "like gpu-h200 or production-vpc.[/dim]"
-        )
-    while not name:
-        if not interactive:
-            raise SystemExit("NAME is required (pass it as an argument, or run interactively)")
-        question = (
-            "What would you like to call this outpost?"
-            if outpost_id
-            else "What would you like to name your new outpost?"
-        )
-        name = _ask(question)
 
     if not secret_name.strip():
         raise SystemExit("secret_name must not be empty")
