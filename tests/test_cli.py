@@ -598,10 +598,7 @@ def test_failed_write_rolls_back_a_newly_created_outpost(tmp_path, monkeypatch):
         cli.init_worker(name="demo", outposts_dir=tmp_path)
 
     [delete_request] = delete_recorder.requests
-    assert (
-        delete_request.full_url
-        == "https://api.devin.ai/opbeta/outposts/outpost_env-demo"
-    )
+    assert delete_request.full_url == "https://api.devin.ai/opbeta/outposts/outpost_env-demo"
     assert delete_request.get_method() == "DELETE"
 
 
