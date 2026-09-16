@@ -519,6 +519,11 @@ def init_worker(
             )
         _console.print()
 
+    if interactive and not _modal_is_configured() and _confirm("Set up Modal now?", default=True):
+        subprocess.run([sys.executable, "-m", "modal", "setup"])
+        if _modal_is_configured():
+            _done("Modal is set up")
+
     if interactive and not name:
         _console.print(
             "[dim]Choose a name people will recognize when selecting a machine in Devin, "
@@ -546,11 +551,6 @@ def init_worker(
             name = ""
             continue
         break
-
-    if interactive and not _modal_is_configured() and _confirm("Set up Modal now?", default=True):
-        subprocess.run([sys.executable, "-m", "modal", "setup"])
-        if _modal_is_configured():
-            _done("Modal is set up")
 
     if not secret_name.strip():
         raise SystemExit("secret_name must not be empty")
