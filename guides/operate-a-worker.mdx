@@ -32,6 +32,8 @@ Common outcomes:
 | --- | --- |
 | No invocation starts | The outpost, credential, deployment, or queue needs attention |
 | An invocation exits immediately with no error | Another worker already accepted that session |
+| `SessionAttachTimeoutError` | Devin never attached to the worker's gateway connection; a fresh worker is dispatched |
+| Sandbox terminated with "session is ... while the worker is still running" | The session ended in Devin first; the watchdog stopped the idle Sandbox |
 | `WorkerExitedError` | The Devin worker returned a nonzero status; inspect preceding output |
 | `SessionStatusUnknownError` | Final state remained unconfirmed; recovery data was preserved when possible |
 

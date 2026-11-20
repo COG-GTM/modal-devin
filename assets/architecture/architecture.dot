@@ -1,0 +1,59 @@
+// modal-devin architecture. Edit this file, then run ./render.sh to refresh
+// architecture.png and architecture.svg. Sources of truth: modal_devin/_runtime.py,
+// modal_devin/cli.py, modal_devin/_observability.py, modal_devin/templates/outpost.py.tmpl.
+digraph modal_devin {
+    graph [rankdir=TB, fontname="DejaVu Sans", fontsize=18, labelloc=t, nodesep=0.45, ranksep=0.55,
+           pad=0.3, newrank=true,
+           label="modal-devin architecture"];
+    node  [shape=box, style="rounded,filled", fillcolor=white, fontname="DejaVu Sans", fontsize=16,
+           margin="0.18,0.10"];
+    edge  [fontname="DejaVu Sans", fontsize=13, color="#444444"];
+
+    subgraph cluster_local {
+        label="Your machine / CI"; style="rounded,dashed"; color="#888888"; fontsize=16;
+        cli [label="modal-devin CLI\ninit · deploy · destroy · doctor\n(outpost names: ^[a-z0-9_-]+$)", fillcolor="#EEF3FF"];
+        outpost_file [label="outposts/<name>.py\ngenerated Modal app (you own it)", shape=note, fillcolor="#FFFBE6"];
+        {rank=same; cli; outpost_file;}
+    }
+
+    subgraph cluster_devin {
+        label="Devin Cloud"; style=rounded; color="#4A6FD1"; fontsize=16;
+        api [label="Outposts API\n/opbeta/outposts · queue · claim\nrelease · session status", fillcolor="#EEF3FF"];
+        gateway [label="Outpost gateway\n(Devin agent attaches here)", fillcolor="#EEF3FF"];
+        {rank=same; api; gateway;}
+    }
+
+    subgraph cluster_modal {
+        label="Modal workspace: one app per outpost (modal-devin-<slug>)"; style=rounded; color="#09AF58"; fontsize=16;
+        secret [label="Modal Secret\nDEVIN_OUTPOSTS_TOKEN\n(+ optional LOGFIRE_TOKEN / OTEL_*)", shape=cylinder, fillcolor="#E9F9EF"];
+        scheduler [label="scheduler function\ncontroller image · max_containers=1\nmodal.Period(3s default)", fillcolor="#E9F9EF"];
+        dict [label="Modal Dict  modal-devin-<slug>-snapshots\ndispatch leases + trace carrier\nsession → snapshot image ID", shape=cylinder, fillcolor="#E9F9EF"];
+        session [label="session function (one per session)\nclaim → Sandbox → worker → finalize → release\nliveness + attach watchdog thread", fillcolor="#E9F9EF"];
+        subgraph cluster_sandbox {
+            label="Modal Sandbox (no service-user token inside)"; style="rounded,filled"; fillcolor="#F4FFF7"; color="#09AF58";
+            worker [label="devin worker start --session --outpost --acceptor-id\nDEVIN_REMOTE_SESSION_TOKEN (session-scoped)\n/root/workspace", fillcolor=white];
+        }
+        snapshot [label="Filesystem snapshot\n(suspended sessions, 30-day TTL default)", shape=folder, fillcolor="#E9F9EF"];
+    }
+
+    otel [label="Logfire / any OTLP backend\n(optional traces)", shape=box, style="rounded,dashed", fillcolor=white];
+
+    cli -> outpost_file [label=" writes (init)"];
+    cli -> api [label=" create / delete outpost"];
+    cli -> secret [label=" create (init)"];
+    cli -> scheduler [label=" modal deploy --strategy rolling\n modal app stop (destroy)", style=dashed];
+
+    secret -> scheduler [style=dotted, arrowhead=none];
+    secret -> session [style=dotted, arrowhead=none];
+    scheduler -> api [label=" list pending\n (skip suspended / terminal)"];
+    scheduler -> dict [label=" reserve lease\n + trace context"];
+    scheduler -> session [label=" session.spawn(id)"];
+    session -> dict [label=" pop lease"];
+    session -> api [label=" claim · status poll\n · release"];
+    session -> worker [label=" Sandbox.create +\n sandbox.exec"];
+    session -> snapshot [label=" snapshot on suspend\n or unsafe final state"];
+    snapshot -> worker [label=" resume", style=dashed];
+    worker -> gateway [label=" outbound HTTPS/WSS\n (no inbound ports)"];
+    scheduler -> otel [style=dashed, arrowhead=vee];
+    session -> otel [style=dashed, arrowhead=vee];
+}

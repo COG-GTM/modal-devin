@@ -44,6 +44,11 @@ The Sandbox must become ready before the Devin worker begins.
 The worker connects outbound to Devin Cloud and executes session tool calls inside
 the Sandbox. Its output appears in Modal logs with the Devin session ID.
 
+While it runs, a watchdog polls the session status. It stops the Sandbox when the
+session ends in Devin first, and it fails the invocation with
+`SessionAttachTimeoutError` when Devin never attaches to the worker's gateway
+connection, so the scheduler can dispatch a fresh worker.
+
 ## 5. The outcome is preserved
 
 | Session outcome | What modal-devin does |

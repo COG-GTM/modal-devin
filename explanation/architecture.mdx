@@ -12,13 +12,50 @@ operate.
 isolated [Modal Sandboxes](https://modal.com/docs/guide/sandboxes) and manages each
 session from startup through cleanup.
 
-```mermaid
-flowchart LR
-    D["Devin Cloud<br/>planning and session UI"] --> P["Outpost"]
-    P --> O["modal-devin<br/>orchestrator on Modal"]
-    O --> S["Modal Sandbox<br/>workspace and Devin worker"]
-    S --> D
-```
+![modal-devin architecture: the CLI, the generated Modal app with its scheduler and session functions, the Sandbox worker, and Devin Cloud](/assets/architecture/architecture.svg)
+
+The diagram source is [`assets/architecture/architecture.dot`](https://github.com/COG-GTM/modal-devin/blob/main/assets/architecture/architecture.dot).
+Edit it and run `assets/architecture/render.sh` (requires Graphviz) to refresh the
+PNG and SVG.
+
+## Components
+
+| Component | Where it runs | Responsibility |
+| --- | --- | --- |
+| `modal-devin` CLI | Your machine or CI | `init`, `deploy`, `destroy`, and `doctor` for generated outpost files |
+| Generated outpost file | Your repository | Owns the Modal `App`, Secret, images, function decorators, and schedule |
+| `scheduler` function | Modal, controller image | Lists pending sessions and spawns one `session` invocation per session |
+| `session` function | Modal, prepared worker image | Claims one session, runs its Sandbox, finalizes, and releases the claim |
+| Modal Sandbox | Modal | Runs `devin worker start` in `/root/workspace` |
+| Modal Dict `modal-devin-<slug>-snapshots` | Modal | Dispatch leases, trace carriers, and the session-to-snapshot index |
+| Devin Outposts API and gateway | Devin Cloud | Queue, claims, session status, and the connection the agent attaches to |
+
+## The orchestrator
+
+The generated Modal application is the orchestrator deployment. It has two functions.
+
+The `scheduler` runs on a `modal.Period` schedule (3 seconds by default) with
+`max_containers=1`. Each run lists the outpost's pending sessions, skips sessions
+that are suspended or already finished, reserves a short-lived dispatch lease in the
+Modal Dict, and calls `session.spawn(session_id)`. It never claims a session.
+
+Each `session` invocation:
+
+1. Pops its dispatch lease and claims the session with a unique acceptor ID. A claim
+   conflict means another invocation won, and this one exits quietly.
+2. Starts a Sandbox from the session's preserved filesystem snapshot, or from the
+   deployed worker image for a new session. Startup waits are bounded by the claim
+   deadline.
+3. Runs `devin worker start --session ... --outpost ... --acceptor-id ...` inside the
+   Sandbox and streams its output to Modal logs, prefixed with the session ID.
+4. Runs a liveness and attach watchdog beside the worker (see below).
+5. Confirms the final session state, snapshots the filesystem when the session
+   suspends or the final state is unsafe, and terminates the Sandbox.
+6. Releases the claim, after both success and failure.
+
+Your generated file exposes deployment policy such as images, secrets, compute,
+regions, retries, and schedule. The library keeps the Outposts and Sandbox lifecycle
+behind the `Worker` API.
 
 ## The worker
 
@@ -28,27 +65,47 @@ files, use project tools, and reach services allowed by your Modal environment.
 The workspace comes from either the current deployed image or a preserved filesystem
 from an earlier suspended attempt.
 
-## The orchestrator
+## Session liveness and attach watchdog
 
-The generated Modal application is the orchestrator deployment. It:
+While the worker runs, a watchdog thread in the `session` function checks the
+session every `status_watchdog_interval_seconds` (10 seconds by default):
 
-- Watches the configured outpost for work.
-- Starts one isolated Sandbox for an accepted session.
-- Runs the worker and streams its output to Modal logs.
-- Preserves the workspace when the session suspends.
-- Cleans up compute and makes failed work retryable.
-
-Your generated file exposes deployment policy such as images, secrets, compute,
-regions, retries, and schedule. The library keeps the Outposts and Sandbox lifecycle
-behind the `Worker` API.
+- If the session reaches a terminal state or leaves the queue, the watchdog
+  terminates the Sandbox instead of letting it idle until the function timeout.
+  Three consecutive `suspended` readings count as the session ending. In every
+  watchdog-ended case the invocation skips finalization, so no filesystem snapshot
+  is taken: a session suspended this way, while its worker is still running, resumes
+  from the deployed image rather than a preserved workspace.
+- If the worker logged its gateway connection but Devin has not attached within
+  `session_attach_timeout_seconds` (20 seconds by default), the watchdog terminates
+  the Sandbox and the invocation raises `SessionAttachTimeoutError`. The claim is
+  released, and the scheduler dispatches a fresh worker. A reconnect restarts the
+  clock.
 
 ## Trust boundary
 
-The raw Devin credential is kept out of the main session environment. The workload
-can still use the limited Outposts capability required to serve its assigned session,
-so use a dedicated admin-scoped Enterprise service user and separate outposts and
-credentials when trust requirements differ. The broad service-user scope is currently
-required by the Outposts flow.
+The Devin service user key lives only in the Modal Secret attached to the
+`scheduler` and `session` functions. Those functions make every Outposts API call:
+listing, claiming, status checks, and release.
+
+The key never enters the Sandbox. The worker receives the claim's short-lived,
+session-scoped connect token (`DEVIN_REMOTE_SESSION_TOKEN`) and gateway URL, plus an
+inert placeholder that satisfies the Devin CLI's token presence check. A compromised
+session workload can reach its own session connection, not the outpost queue.
+
+There is no credential proxy or sidecar container. Use a dedicated Enterprise service
+user, and separate outposts and credentials when trust requirements differ. See the
+[security model](/explanation/security).
+
+## Tracing
+
+The scheduler and session runtimes emit OpenTelemetry spans through Pydantic Logfire.
+Each scheduler poll starts a trace. The trace carrier is stored with the dispatch
+lease, so the `session` invocation continues the same trace through claim, Sandbox
+start, the worker process, finalization, and release. Add `LOGFIRE_TOKEN` to the
+Modal Secret to send traces to Logfire, or set `OTEL_EXPORTER_OTLP_ENDPOINT` for
+another backend. Without either, no traces leave the container. See
+[Configure runtime behavior](/guides/runtime-configuration#trace-sessions-with-opentelemetry).
 
 ## Network requirements
 
@@ -59,6 +116,16 @@ IP, or a connection initiated from Devin Cloud.
 
 One generated application represents one outpost deployment. Give deployments unique,
 durable names so their Modal resources and resumable work remain independent.
+
+- `init` validates the outpost name locally (lowercase letters, digits, dashes, and
+  underscores) before it calls the Outposts API, creates the outpost and Modal
+  Secret, writes the file, and optionally deploys it.
+- `deploy` always uses Modal's rolling strategy, so running sessions finish on the
+  previous version.
+- `destroy` stops each selected Modal app, then deletes its Devin outpost. It keeps
+  the generated file and the Modal Secret.
+- `doctor` checks the Modal SDK, Modal token, Secret, and that each outpost file has
+  a deployed app.
 
 <Card title="Session lifecycle" icon="route" href="/explanation/session-lifecycle" horizontal>
   See what happens when a session is queued, runs, suspends, completes, or fails.
