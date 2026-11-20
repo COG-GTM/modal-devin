@@ -72,7 +72,10 @@ session every `status_watchdog_interval_seconds` (10 seconds by default):
 
 - If the session reaches a terminal state or leaves the queue, the watchdog
   terminates the Sandbox instead of letting it idle until the function timeout.
-  Three consecutive `suspended` readings count as the session ending.
+  Three consecutive `suspended` readings count as the session ending. In every
+  watchdog-ended case the invocation skips finalization, so no filesystem snapshot
+  is taken: a session suspended this way, while its worker is still running, resumes
+  from the deployed image rather than a preserved workspace.
 - If the worker logged its gateway connection but Devin has not attached within
   `session_attach_timeout_seconds` (20 seconds by default), the watchdog terminates
   the Sandbox and the invocation raises `SessionAttachTimeoutError`. The claim is
