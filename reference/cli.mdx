@@ -37,7 +37,9 @@ Generates one Python application in `OUTPOSTS_DIR`. In an interactive terminal, 
 
 <ParamField path="NAME" type="string">
   Human-readable Devin Outposts outpost name using only lowercase letters, digits, dashes,
-  and underscores. It is also available as `--name`.
+  and underscores. It is also available as `--name`. When creating a new outpost, the
+  name is validated locally before any API call: interactive runs ask again, and
+  non-interactive runs exit with an error.
 </ParamField>
 
 <ParamField path="--api-url" type="string" default="https://api.devin.ai">

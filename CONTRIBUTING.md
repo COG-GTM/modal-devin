@@ -16,13 +16,15 @@ integration details behind the following private boundaries:
 - `_config.py`: validated settings and resource identities;
 - `_client.py`: Devin Outposts HTTP contract;
 - `_runtime.py`: claim, dispatch, execution, and recovery state machine;
-- `images.py`: composable public image helpers and sidecar compatibility;
+- `_observability.py`: Logfire/OpenTelemetry setup and trace-context hand-off;
+- `images.py`: composable public image helpers and the Devin CLI contract check;
 - `worker.py`: the small public runtime and image API;
 - `templates/outpost.py.tmpl`: the user-owned Modal application composition root.
 
 Generated applications should use Modal's native `App` and `@app.function`
-vocabulary. Do not expose sidecar image IDs, raw tokens, raw HTTP payloads, or
-Modal Dicts through the public API.
+vocabulary. Do not expose raw tokens, raw HTTP payloads, or Modal Dicts through the
+public API. The service user token must never enter the Sandbox; the worker receives
+only the claim's session-scoped connect token.
 
 `Worker.run_session()` deliberately derives its option signature from
 `modal.Sandbox.create` with `ParamSpec`. Keep its runtime validation narrower than
@@ -39,9 +41,12 @@ before spawning and cleared when the session invocation starts; serialized sched
 runs make stale-lease replacement deterministic. Scheduler failures must propagate so
 Modal can alert and apply configured retries.
 
-The sidecar image cache key includes the Caddy configuration, install recipe, and
-`_SIDECAR_RECIPE_SCHEMA`. Bump that schema whenever `_sidecar_image()` changes in a
-way not represented by the embedded inputs.
+The worker image build runs a Devin CLI contract check (`_DEVIN_CLI_CONTRACT_CHECK`
+in `images.py`). Update it together with the `sandbox.exec` command in `_runtime.py`
+whenever the CLI flags or environment hand-off change.
+
+The architecture diagram is Graphviz: edit `assets/architecture/architecture.dot`
+and run `assets/architecture/render.sh` to refresh the committed PNG and SVG.
 
 ## Checks
 

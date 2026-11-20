@@ -32,6 +32,25 @@ behavior. Check the credential, outpost, configured API URL, and preceding netwo
 Devin returned a response outside this release's safe handling range. Check release
 compatibility and the original response error; mark the affected invocation as failed.
 
+## `ClaimDeadlineError`
+
+A claimed session could not reach a safe connection point before its
+server-assigned claim deadline, after reserving `claim_connect_margin_seconds` for
+the worker to connect. The claim is released so another invocation can retry. If
+it recurs, inspect Sandbox startup time and image availability.
+
+## `SessionAttachTimeoutError`
+
+The worker connected to the outpost gateway, but Devin did not attach within
+`session_attach_timeout_seconds` (20 seconds by default). The Sandbox is terminated,
+the claim is released, and the scheduler dispatches a fresh worker whose new
+connection can attach. Occasional occurrences are self-healing; repeated ones point
+to an upstream connectivity problem.
+
+<ResponseField name="session_id" type="str">
+  Session whose worker was never attached.
+</ResponseField>
+
 ## `SessionStatusUnknownError`
 
 The worker exited, but `modal-devin` was unable to confirm a safe final session state. It
