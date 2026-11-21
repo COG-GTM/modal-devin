@@ -58,6 +58,16 @@ environment, so add the package once. The project's `pyproject.toml` needs a
 uv add modal-devin
 ```
 
+If the project already has a `pyproject.toml` with only tool settings (no
+`[project]` table), add one at the top of the file first:
+
+```toml
+[project]
+name = "my-project"
+version = "0.1.0"
+requires-python = ">=3.11"
+```
+
 ## If setup fails
 
 The wizard avoids overwriting existing files and reports any remote resource that

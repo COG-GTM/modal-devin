@@ -32,6 +32,16 @@ in your project's environment. Add it once. The project's `pyproject.toml` needs
 uv add modal-devin
 ```
 
+If the project already has a `pyproject.toml` with only tool settings (no
+`[project]` table), add one at the top of the file first:
+
+```toml
+[project]
+name = "my-project"
+version = "0.1.0"
+requires-python = ">=3.11"
+```
+
 Read the full documentation at [modal.com/docs/devin](https://modal.com/docs/devin).
 
 > [!NOTE]
