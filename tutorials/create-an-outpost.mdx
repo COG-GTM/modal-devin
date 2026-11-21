@@ -46,6 +46,28 @@ without echoing it.
   </Step>
 </Steps>
 
+## Add modal-devin to your project
+
+`uvx` runs the wizard without installing it. Later commands in these docs, such as
+`uv run modal-devin doctor` and `uv run modal-devin deploy`, run in your project's
+environment, so add the package once. The project's `pyproject.toml` needs a
+`[project]` table with `requires-python = ">=3.11"` or newer; if the project has no
+`pyproject.toml` yet, `uv init --bare --python 3.11` creates one.
+
+```bash
+uv add modal-devin
+```
+
+If the project already has a `pyproject.toml` with only tool settings (no
+`[project]` table), add one at the top of the file first:
+
+```toml
+[project]
+name = "my-project"
+version = "0.1.0"
+requires-python = ">=3.11"
+```
+
 ## If setup fails
 
 The wizard avoids overwriting existing files and reports any remote resource that
