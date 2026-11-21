@@ -5,8 +5,15 @@ that you configure and control.
 
 ## Get started
 
-[Install uv](https://docs.astral.sh/uv/getting-started/installation/) if you do not
-already have it, then run the interactive setup wizard:
+You need:
+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) and Python 3.11 or newer;
+- a [Modal](https://modal.com) account (the wizard runs `modal setup` if this machine
+  has no Modal credentials yet);
+- a Devin organization with Outposts enabled, and a key from an **admin-scoped
+  Enterprise service user** ([create one](https://docs.devin.ai/api-reference/authentication)).
+
+Then run the interactive setup wizard from the project that will own the outpost:
 
 ```bash
 uvx modal-devin init
@@ -14,6 +21,15 @@ uvx modal-devin init
 
 The wizard configures Modal if needed, creates your outpost, stores its Devin
 credential as a Modal Secret, generates the Modal application, and deploys it.
+
+`uvx` runs the wizard without installing it. The other guides run commands such as
+`uv run modal-devin doctor` and `uv run modal-devin deploy`, which need `modal-devin`
+in your project's environment. Add it once (run `uv init --bare` first if the project
+has no `pyproject.toml`):
+
+```bash
+uv add modal-devin
+```
 
 Read the full documentation at [modal.com/docs/devin](https://modal.com/docs/devin).
 
@@ -24,4 +40,4 @@ Read the full documentation at [modal.com/docs/devin](https://modal.com/docs/dev
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development and test workflow. Report
-vulnerabilities through [GitHub private vulnerability reporting](https://github.com/aaazzam/modal-devin/security).
+vulnerabilities through [GitHub private vulnerability reporting](https://github.com/modal-labs/modal-devin/security).
