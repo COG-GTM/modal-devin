@@ -26,7 +26,7 @@ credential as a Modal Secret, generates the Modal application, and deploys it.
 `uv run modal-devin doctor` and `uv run modal-devin deploy`, which need `modal-devin`
 in your project's environment. Add it once. The project's `pyproject.toml` needs a
 `[project]` table with `requires-python = ">=3.11"` or newer; if the project has no
-`pyproject.toml` yet, `uv init --bare` creates one:
+`pyproject.toml` yet, `uv init --bare --python 3.11` creates one:
 
 ```bash
 uv add modal-devin
